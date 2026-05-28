@@ -1,4 +1,5 @@
 token.txt
+covers/
 .venv/
 __pycache__/
 *.py[cod]
