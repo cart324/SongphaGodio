@@ -1,0 +1,7 @@
+py-cord[voice]
+yt-dlp[default]
+mutagen
+pydub
+PyNaCl
+requests
+packaging
