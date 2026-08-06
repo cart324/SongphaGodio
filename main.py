@@ -117,7 +117,6 @@ async def cog_list(ctx):
 
         await ctx.respond("로드 가능한 cog :" + str(avail_cogs_list) + "\n현제 로드된 cog :" + str(current_cogs_list))
     except Exception:
-        error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
@@ -139,7 +138,6 @@ async def unload_cog(ctx, cog_name: discord.Option(str)):
         await ctx.respond(f"{cog_name}은 로드되어 있지 않습니다.")
 
     except Exception:
-        error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
@@ -161,7 +159,6 @@ async def load_cog(ctx, cog_name: discord.Option(str)):
         await ctx.respond(f"{cog_name}은 이미 로드되어 있습니다.")
 
     except Exception:
-        error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
@@ -174,7 +171,6 @@ async def reload_bot(ctx):
         initial_cog_load()
         await ctx.respond("봇을 재시작 하였습니다.")
     except Exception:
-        error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
@@ -186,7 +182,6 @@ async def sync_commands(ctx):
         await bot.sync_commands()
         await ctx.respond("커맨드를 동기화하였습니다.")
     except Exception:
-        error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
@@ -226,7 +221,6 @@ async def update(ctx):
         await ctx.respond("업데이트가 완료되었습니다.")
 
     except Exception:
-        error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
@@ -252,7 +246,8 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print_log("bot has been stopped by admin")
     except Exception:
-        print_log(f"unhandled exception occurred: \n{traceback.format_exc(limit=None, chain=True)}")
+        if bot.restart_reason is None:
+            print_log(f"unhandled exception occurred: \n{traceback.format_exc(limit=None, chain=True)}")
 
     # bot.close() 호출 후 실행되는 부분입니다.
     # 재시작 이유(restart_reason)에 따라 다른 처리를 합니다.
