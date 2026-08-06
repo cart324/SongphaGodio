@@ -6,6 +6,7 @@ import subprocess
 import requests
 import asyncio
 import yt_dlp
+from modules.error_notifier import fetch_log_recipients
 
 # Audio_player.py 에서 server_info_dict를 가져오기 위함
 # 이 import 경로는 프로젝트 구조에 따라 달라질 수 있습니다.
@@ -25,9 +26,9 @@ class Maintenance(commands.Cog):
     @commands.slash_command(
         name="update_yt_dlp",
         description="yt-dlp 라이브러리를 업데이트하고 봇을 재시작합니다. (관리자 전용)",
-        guild_ids=[DEVELOP_SERVER_ID]
+        guild_ids=[DEVELOP_SERVER_ID],
+        default_member_permissions=discord.Permissions(administrator=True)
     )
-    @commands.is_owner()
     async def update_yt_dlp(self, ctx: discord.ApplicationContext):
         """yt-dlp를 최신 버전으로 업데이트하고 봇을 재시작하는 관리자 명령어"""
         await ctx.defer()
@@ -83,9 +84,9 @@ class Maintenance(commands.Cog):
     @commands.slash_command(
         name="check_players",
         description="현재 봇이 활성화된 (음성 채널에 있는) 서버 목록을 확인합니다. (관리자 전용)",
-        guild_ids=[DEVELOP_SERVER_ID]
+        guild_ids=[DEVELOP_SERVER_ID],
+        default_member_permissions=discord.Permissions(administrator=True)
     )
-    @commands.is_owner()
     async def check_players(self, ctx: discord.ApplicationContext):
         """현재 활성화된 플레이어(음성 채널)가 있는 서버 목록을 확인합니다."""
         await ctx.defer()
@@ -134,24 +135,27 @@ class Maintenance(commands.Cog):
 
     # is_owner() 체크 실패 시 에러 핸들러
     async def cog_check(self, ctx: discord.ApplicationContext) -> bool:
-        return await self.bot.is_owner(ctx.author)
+        return bool(ctx.guild and ctx.author.guild_permissions.administrator)
 
     async def cog_command_error(self, ctx: discord.ApplicationContext, error: Exception):
-        if isinstance(error, commands.NotOwner):
+        if isinstance(error, commands.CheckFailure):
             await ctx.respond("이 명령어는 봇 소유자만 사용할 수 있습니다.", ephemeral=True)
         else:
             # 다른 종류의 에러가 발생했을 때 콘솔에 로그를 남깁니다.
             print(f"An error occurred in the Maintenance cog: {error}", file=sys.stderr)
             traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+            error_log = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            recipients = await fetch_log_recipients(self.bot)
+            await recipients.send(f"```Maintenance command error\n{error_log}```")
             if not ctx.interaction.response.is_done():
                 await ctx.respond("명령어 처리 중 오류가 발생했습니다.", ephemeral=True)
 
     @commands.slash_command(
         name="say",
         description="활성화된 모든 플레이어 채널에 관리자 메시지를 전송합니다. (관리자 전용)",
-        guild_ids=[DEVELOP_SERVER_ID]
+        guild_ids=[DEVELOP_SERVER_ID],
+        default_member_permissions=discord.Permissions(administrator=True)
     )
-    @commands.is_owner()
     async def say(self, ctx: discord.ApplicationContext, text: discord.Option(str, "전송할 메시지 내용", required=True)):
         """활성화된 모든 플레이어에게 메시지를 보냅니다."""
         await ctx.defer()
@@ -182,14 +186,17 @@ class Maintenance(commands.Cog):
         )
 
     async def cog_check(self, ctx: discord.ApplicationContext) -> bool:
-        return await self.bot.is_owner(ctx.author)
+        return bool(ctx.guild and ctx.author.guild_permissions.administrator)
 
     async def cog_command_error(self, ctx: discord.ApplicationContext, error: Exception):
-        if isinstance(error, commands.NotOwner):
+        if isinstance(error, commands.CheckFailure):
             await ctx.respond("이 명령어는 봇 소유자만 사용할 수 있습니다.", ephemeral=True)
         else:
             print(f"An error occurred in Maintenance cog: {error}", file=sys.stderr)
             traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+            error_log = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            recipients = await fetch_log_recipients(self.bot)
+            await recipients.send(f"```Maintenance command error\n{error_log}```")
 
 
 def setup(bot: commands.Bot):

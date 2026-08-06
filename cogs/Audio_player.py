@@ -8,6 +8,7 @@ import os
 import time
 import requests
 import traceback
+from modules.error_notifier import fetch_log_recipients
 
 from modules.UI_handler import handling_embed, handling_log
 from modules.Song_processer import preprocessing_song, youtube_playlist_extract, refresh_song_urls
@@ -150,7 +151,7 @@ async def play_loop(guild_id: int, bot: commands.Bot) -> None:
 
                         # 관리자에게 DM 발송 (yt_dlp 이슈 의심)
                         try:
-                            admin_user = bot.get_user(344384179552780289)
+                            admin_user = await fetch_log_recipients(bot)
                             if admin_user:
                                 guild = bot.get_guild(guild_id)
                                 guild_name = guild.name if guild else "알 수 없는 서버"
@@ -178,7 +179,7 @@ async def play_loop(guild_id: int, bot: commands.Bot) -> None:
         # 그 외 다른 오류 처리 (기존 로직 유지)
         else:
             print(f"Unhandled error in play_loop for guild {guild_id}:\n{error_log}")
-            cart = bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(bot)
             if cart:
                 try:
                     await cart.send(f"```Error in play_loop in guild {guild_id}\n{error_log}```")
@@ -273,7 +274,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -346,7 +347,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -395,7 +396,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -423,7 +424,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -466,7 +467,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -508,7 +509,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -537,7 +538,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -573,7 +574,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -607,7 +608,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -641,7 +642,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -672,7 +673,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -704,7 +705,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(
@@ -752,7 +753,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in on_voice_state_update for guild {member.guild.id}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(f"```Error in on_voice_state_update in {member.guild.name}\n{error_log}```")

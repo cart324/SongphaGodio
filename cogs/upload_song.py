@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import traceback
+from modules.error_notifier import fetch_log_recipients
 
 develop_server_ids = [1242846739434569738]
 
@@ -22,7 +23,7 @@ class FileUploader(commands.Cog, name="file_uploader"):
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
             print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = self.bot.get_user(344384179552780289)
+            cart = await fetch_log_recipients(self.bot)
             if cart:
                 try:
                     await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")

@@ -5,6 +5,7 @@ import os
 import shutil
 import stat
 import traceback
+from modules.error_notifier import fetch_log_recipients
 import time
 import requests
 import yt_dlp
@@ -116,7 +117,7 @@ async def cog_list(ctx):
         await ctx.respond("로드 가능한 cog :" + str(avail_cogs_list) + "\n현제 로드된 cog :" + str(current_cogs_list))
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = bot.get_user(344384179552780289)
+        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
         await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
         await ctx.respond("알 수 없는 오류입니다.")
@@ -139,7 +140,7 @@ async def unload_cog(ctx, cog_name: discord.Option(str)):
 
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = bot.get_user(344384179552780289)
+        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
         await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
         await ctx.respond("알 수 없는 오류입니다.")
@@ -162,7 +163,7 @@ async def load_cog(ctx, cog_name: discord.Option(str)):
 
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = bot.get_user(344384179552780289)
+        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
         await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
         await ctx.respond("알 수 없는 오류입니다.")
@@ -176,7 +177,7 @@ async def reload_bot(ctx):
         await ctx.respond("봇을 재시작 하였습니다.")
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = bot.get_user(344384179552780289)
+        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
         await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
         await ctx.respond("알 수 없는 오류입니다.")
@@ -189,7 +190,7 @@ async def sync_commands(ctx):
         await ctx.respond("커맨드를 동기화하였습니다.")
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = bot.get_user(344384179552780289)
+        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
         await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
         await ctx.respond("알 수 없는 오류입니다.")
@@ -204,13 +205,22 @@ async def update(ctx):
         os.system(f"git clone https://github.com/cart324/{project_name}")
 
         for i in os.listdir(project_name):
+            # Git metadata belongs to the temporary clone, not the deployment folder.
+            if i == ".git":
+                continue
 
-            for (root, dirs, files) in os.walk(f"{project_name}/{i}"):
+            source_path = os.path.join(project_name, i)
+            if os.path.isfile(source_path):
+                if os.path.exists(i):
+                    os.remove(i)
+                shutil.move(source_path, i)
+                continue
+
+            for (root, dirs, files) in os.walk(source_path):
                 for file in files:
                     if os.path.exists(i + "/" + file):
                         os.remove(i + "/" + file)
                     shutil.move(project_name + "/" + i + "/" + file, i + "/" + file)
-
         shutil.rmtree(project_name, onerror=on_rm_error)
 
         unload_all_cogs()
@@ -221,7 +231,7 @@ async def update(ctx):
 
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = bot.get_user(344384179552780289)
+        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
         await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
         await ctx.respond("알 수 없는 오류입니다.")
