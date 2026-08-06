@@ -176,7 +176,7 @@ async def play_loop(guild_id: int, bot: commands.Bot) -> None:
 
         # 그 외 다른 오류 처리 (기존 로직 유지)
         else:
-            await send_error_log(f"Error in play_loop in guild {guild_id}\n{error_log}")
+            await send_error_log(traceback.format_exc())
             if server_info.embed_channel:
                 try:
                     await server_info.embed_channel.send("재생 중 알 수 없는 오류가 발생하여 플레이어를 중지합니다.")
@@ -264,8 +264,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 ephemeral=True
             )
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -330,8 +329,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             embed = discord.Embed(title="추가된 곡 목록", description=added_songs_text)
             await ctx.followup.send(embed=embed, ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -372,8 +370,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
 
             handling_log('delete_from_queue', user_name=ctx.author.name, index1=start_index, index2=end_index)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -393,8 +390,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             else:
                 await ctx.respond("재생 중인 곡이 없습니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -429,8 +425,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             else:
                 await ctx.respond("재생 중인 오디오가 없습니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -464,8 +459,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             await ctx.followup.send("현재 곡의 볼륨을 자동으로 조절했습니다.", ephemeral=True)
             handling_log('auto_volume', user_name=ctx.author.name, index1=new_base_volume)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -486,8 +480,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             else:
                 await ctx.respond("재생 중이 아닙니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -515,8 +508,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             else:
                 await ctx.respond("재생 중이 아닙니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -542,8 +534,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 else:
                     await ctx.respond("재생 중이 아닙니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -569,8 +560,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 else:
                     await ctx.respond("재생 중이 아닙니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -593,8 +583,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 await handling_embed(server_info)
                 await ctx.respond("플레이어를 갱신하였습니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -618,8 +607,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             else:
                 await ctx.respond("봇이 음성 채널에 있지 않습니다.", ephemeral=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
 
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -660,7 +648,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 handling_log('auto_leave')
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in on_voice_state_update in {member.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc())
 
 
 def setup(bot):

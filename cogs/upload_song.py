@@ -21,8 +21,7 @@ class FileUploader(commands.Cog, name="file_uploader"):
             print(f"{url}")
             await ctx.respond("완료")
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             await ctx.respond("알 수 없는 오류입니다.", ephemeral=True)
 
 

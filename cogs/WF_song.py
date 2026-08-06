@@ -25,8 +25,7 @@ class WFSong(commands.Cog, name="wf_song"):
             audio_player_cog = self.bot.get_cog("audio_player")
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -41,8 +40,7 @@ class WFSong(commands.Cog, name="wf_song"):
             audio_player_cog = self.bot.get_cog("audio_player")
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -57,8 +55,7 @@ class WFSong(commands.Cog, name="wf_song"):
             audio_player_cog = self.bot.get_cog("audio_player")
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -73,8 +70,7 @@ class WFSong(commands.Cog, name="wf_song"):
             audio_player_cog = self.bot.get_cog("audio_player")
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -89,8 +85,7 @@ class WFSong(commands.Cog, name="wf_song"):
             audio_player_cog = self.bot.get_cog("audio_player")
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -105,8 +100,7 @@ class WFSong(commands.Cog, name="wf_song"):
             audio_player_cog = self.bot.get_cog("audio_player")
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -121,8 +115,7 @@ class WFSong(commands.Cog, name="wf_song"):
             audio_player_cog = self.bot.get_cog("audio_player")
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
-            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
+            await send_error_log(traceback.format_exc(), ctx.author.name)
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)

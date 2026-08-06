@@ -119,7 +119,7 @@ async def cog_list(ctx):
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
-        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
+        await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -141,7 +141,7 @@ async def unload_cog(ctx, cog_name: discord.Option(str)):
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
-        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
+        await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -163,7 +163,7 @@ async def load_cog(ctx, cog_name: discord.Option(str)):
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
-        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
+        await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -176,7 +176,7 @@ async def reload_bot(ctx):
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
-        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
+        await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -188,7 +188,7 @@ async def sync_commands(ctx):
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
-        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
+        await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -228,7 +228,7 @@ async def update(ctx):
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
         print_log(f"error has been occurred")
-        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
+        await send_error_log(traceback.format_exc(), ctx.author.name)
         await ctx.respond("알 수 없는 오류입니다.")
 
 

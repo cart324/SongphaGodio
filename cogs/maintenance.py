@@ -144,7 +144,7 @@ class Maintenance(commands.Cog):
             # 다른 종류의 에러가 발생했을 때 콘솔에 로그를 남깁니다.
             error_log = "".join(traceback.format_exception(type(error), error, error.__traceback__))
 
-            await send_error_log("Maintenance command error\n" + error_log)
+            await send_error_log(error_log, ctx.author.name)
             if not ctx.interaction.response.is_done():
                 await ctx.respond("명령어 처리 중 오류가 발생했습니다.", ephemeral=True)
 
@@ -192,7 +192,7 @@ class Maintenance(commands.Cog):
         else:
             error_log = "".join(traceback.format_exception(type(error), error, error.__traceback__))
 
-            await send_error_log("Maintenance command error\n" + error_log)
+            await send_error_log(error_log, ctx.author.name)
 
 
 def setup(bot: commands.Bot):
