@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import traceback
-from modules.error_notifier import fetch_log_recipients
+from modules.error_notifier import send_error_log
 
 song_channel_id = 1337411731449843834
 
@@ -26,13 +26,7 @@ class WFSong(commands.Cog, name="wf_song"):
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -48,13 +42,7 @@ class WFSong(commands.Cog, name="wf_song"):
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -70,13 +58,7 @@ class WFSong(commands.Cog, name="wf_song"):
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -92,13 +74,7 @@ class WFSong(commands.Cog, name="wf_song"):
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -114,13 +90,7 @@ class WFSong(commands.Cog, name="wf_song"):
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -136,13 +106,7 @@ class WFSong(commands.Cog, name="wf_song"):
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)
@@ -158,13 +122,7 @@ class WFSong(commands.Cog, name="wf_song"):
             await audio_player_cog.play.callback(audio_player_cog, ctx, url=link)
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             
             if ctx.response.is_done():
                 await ctx.followup.send("알 수 없는 오류입니다.", ephemeral=True)

@@ -2,6 +2,7 @@ import discord
 import re
 import time
 import traceback
+from modules.error_notifier import send_error_log
 
 
 async def handling_embed(server_info) -> None:
@@ -72,7 +73,7 @@ async def handling_embed(server_info) -> None:
                     server_info.embed_id = message.id
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        print(f"Unhandled error in handling_embed: {error_log}")
+        await send_error_log(f"Unhandled error in handling_embed: {error_log}")
         if server_info and server_info.embed_channel:
             try:
                 await server_info.embed_channel.send("플레이어 UI를 업데이트하는 중 오류가 발생했습니다. 일부 기능이 정상적으로 보이지 않을 수 있습니다.")
@@ -159,7 +160,7 @@ class PlayerUISuperClass(discord.ui.View):
                     )
                 except Exception:
                     error_log = traceback.format_exc(limit=None, chain=True)
-                    print(f"Unhandled error in select_callback: {error_log}")
+                    await send_error_log(f"Unhandled error in select_callback: {error_log}")
                     if not interaction.response.is_done():
                         await interaction.response.send_message("알 수 없는 오류입니다.", ephemeral=True)
                     else:
@@ -225,7 +226,7 @@ async def stop_button(ita, server_info):
             await ita.response.send_message("재생 중이 아닙니다.", ephemeral=True)
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        print(f"Unhandled error in stop_button: {error_log}")
+        await send_error_log(f"Unhandled error in stop_button: {error_log}")
         if not ita.response.is_done():
             await ita.response.send_message("알 수 없는 오류입니다.", ephemeral=True)
         else:
@@ -251,7 +252,7 @@ async def pause_resume_button(ita, server_info):
             await ita.response.send_message("재생 중이 아닙니다.", ephemeral=True)
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        print(f"Unhandled error in pause_resume_button: {error_log}")
+        await send_error_log(f"Unhandled error in pause_resume_button: {error_log}")
         if not ita.response.is_done():
             await ita.response.send_message("알 수 없는 오류입니다.", ephemeral=True)
         else:
@@ -269,7 +270,7 @@ async def skip_button(ita, server_info):
             await ita.response.send_message("재생 중인 곡이 없습니다.", ephemeral=True)
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        print(f"Unhandled error in skip_button: {error_log}")
+        await send_error_log(f"Unhandled error in skip_button: {error_log}")
         if not ita.response.is_done():
             await ita.response.send_message("알 수 없는 오류입니다.", ephemeral=True)
         else:
@@ -293,7 +294,7 @@ async def loop_button(ita, server_info):
                 await ita.response.send_message("재생 중이 아닙니다.", ephemeral=True)
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        print(f"Unhandled error in loop_button: {error_log}")
+        await send_error_log(f"Unhandled error in loop_button: {error_log}")
         if not ita.response.is_done():
             await ita.response.send_message("알 수 없는 오류입니다.", ephemeral=True)
         else:
@@ -317,7 +318,7 @@ async def shuffle_button(ita, server_info):
                 await ita.response.send_message("재생 중이 아닙니다.", ephemeral=True)
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        print(f"Unhandled error in shuffle_button: {error_log}")
+        await send_error_log(f"Unhandled error in shuffle_button: {error_log}")
         if not ita.response.is_done():
             await ita.response.send_message("알 수 없는 오류입니다.", ephemeral=True)
         else:

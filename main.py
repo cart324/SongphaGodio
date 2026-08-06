@@ -5,7 +5,7 @@ import os
 import shutil
 import stat
 import traceback
-from modules.error_notifier import fetch_log_recipients
+from modules.error_notifier import configure_error_notifier, send_error_log
 import time
 import requests
 import yt_dlp
@@ -41,6 +41,7 @@ def patch_pycord_voice_remove_ssrc():
 
 
 bot = commands.Bot()
+configure_error_notifier(bot)
 # 봇의 재시작 이유를 저장할 플래그를 새로 만듭니다. (None, 'vpn', 'update')
 bot.restart_reason = None
 
@@ -117,9 +118,8 @@ async def cog_list(ctx):
         await ctx.respond("로드 가능한 cog :" + str(avail_cogs_list) + "\n현제 로드된 cog :" + str(current_cogs_list))
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
-        await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
+        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -140,9 +140,8 @@ async def unload_cog(ctx, cog_name: discord.Option(str)):
 
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
-        await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
+        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -163,9 +162,8 @@ async def load_cog(ctx, cog_name: discord.Option(str)):
 
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
-        await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
+        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -177,9 +175,8 @@ async def reload_bot(ctx):
         await ctx.respond("봇을 재시작 하였습니다.")
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
-        await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
+        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -190,9 +187,8 @@ async def sync_commands(ctx):
         await ctx.respond("커맨드를 동기화하였습니다.")
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
-        await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
+        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
         await ctx.respond("알 수 없는 오류입니다.")
 
 
@@ -231,9 +227,8 @@ async def update(ctx):
 
     except Exception:
         error_log = traceback.format_exc(limit=None, chain=True)
-        cart = await fetch_log_recipients(bot)
         print_log(f"error has been occurred")
-        await cart.send("```" + "\n" "사용자 = " + ctx.author.name + "\n" + str(error_log) + "```")
+        await send_error_log("사용자 = " + ctx.author.name + "\n" + str(error_log))
         await ctx.respond("알 수 없는 오류입니다.")
 
 

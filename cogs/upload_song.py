@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import traceback
-from modules.error_notifier import fetch_log_recipients
+from modules.error_notifier import send_error_log
 
 develop_server_ids = [1242846739434569738]
 
@@ -22,13 +22,7 @@ class FileUploader(commands.Cog, name="file_uploader"):
             await ctx.respond("완료")
         except Exception:
             error_log = traceback.format_exc(limit=None, chain=True)
-            print(f"Unhandled error in {ctx.command.name}:\n{error_log}")
-            cart = await fetch_log_recipients(self.bot)
-            if cart:
-                try:
-                    await cart.send(f"```Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}```")
-                except Exception as e:
-                    print(f"Failed to send error DM: {e}")
+            await send_error_log(f"Error in {ctx.command.name} by {ctx.author.name} in {ctx.guild.name}\n{error_log}")
             await ctx.respond("알 수 없는 오류입니다.", ephemeral=True)
 
 

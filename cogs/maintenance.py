@@ -6,7 +6,7 @@ import subprocess
 import requests
 import asyncio
 import yt_dlp
-from modules.error_notifier import fetch_log_recipients
+from modules.error_notifier import send_error_log
 
 # Audio_player.py 에서 server_info_dict를 가져오기 위함
 # 이 import 경로는 프로젝트 구조에 따라 달라질 수 있습니다.
@@ -142,11 +142,9 @@ class Maintenance(commands.Cog):
             await ctx.respond("이 명령어는 봇 소유자만 사용할 수 있습니다.", ephemeral=True)
         else:
             # 다른 종류의 에러가 발생했을 때 콘솔에 로그를 남깁니다.
-            print(f"An error occurred in the Maintenance cog: {error}", file=sys.stderr)
-            traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
             error_log = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-            recipients = await fetch_log_recipients(self.bot)
-            await recipients.send(f"```Maintenance command error\n{error_log}```")
+
+            await send_error_log("Maintenance command error\n" + error_log)
             if not ctx.interaction.response.is_done():
                 await ctx.respond("명령어 처리 중 오류가 발생했습니다.", ephemeral=True)
 
@@ -192,11 +190,9 @@ class Maintenance(commands.Cog):
         if isinstance(error, commands.CheckFailure):
             await ctx.respond("이 명령어는 봇 소유자만 사용할 수 있습니다.", ephemeral=True)
         else:
-            print(f"An error occurred in Maintenance cog: {error}", file=sys.stderr)
-            traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
             error_log = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-            recipients = await fetch_log_recipients(self.bot)
-            await recipients.send(f"```Maintenance command error\n{error_log}```")
+
+            await send_error_log("Maintenance command error\n" + error_log)
 
 
 def setup(bot: commands.Bot):
