@@ -24,7 +24,7 @@ FFMPEG_OPTIONS = {
         '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
         f'-user_agent "{LATEST_USER_AGENT}" '  # User-Agent 옵션 추가
         '-analyzeduration 20M -probesize 20M '
-        '-fflags +nobuffer -rw_timeout 5000000'
+        '-rw_timeout 30000000'
     ),
     'options': '-vn -compression_level 10'
 }
