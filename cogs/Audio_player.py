@@ -13,6 +13,7 @@ from modules.error_notifier import send_error_log
 from modules.UI_handler import handling_embed, handling_log
 from modules.Song_processer import preprocessing_song, youtube_playlist_extract, refresh_song_urls
 from modules.Song_processer import async_normalize_volume
+from modules.ffmpeg_log_filter import FilteredFFmpegPCMAudio
 
 BACKGROUND_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
@@ -97,11 +98,37 @@ async def play_loop(guild_id: int, bot: commands.Bot) -> None:
             else:
                 option = FFMPEG_OPTIONS_LOCAL
 
-            # ffmpeg로 스트림 재생
-            source = discord.FFmpegPCMAudio(current_song['play_url'], **option)
+            # ffmpeg stderr 원문은 터미널에 노출하지 않고 재생 종료 시 분류합니다.
+            guild = bot.get_guild(guild_id)
+            source = FilteredFFmpegPCMAudio(
+                current_song['play_url'],
+                song_title=current_song.get('title'),
+                guild_name=guild.name if guild else str(guild_id),
+                stream_metadata=current_song.get('stream_metadata'),
+                expected_ip=VPN_IP,
+                **option,
+            )
             audio_with_volume = discord.PCMVolumeTransformer(source, volume=current_song['volume'])
-            server_info.voice_client.play(audio_with_volume,
-                                          after=lambda e: bot.loop.create_task(play_loop(guild_id, bot)))
+
+            def after_playback(_error):
+                # Pycord는 자체 cleanup보다 after를 먼저 호출하므로 여기서 FFmpeg를 먼저 종료합니다.
+                try:
+                    audio_with_volume.cleanup()
+                finally:
+                    def schedule_next_song():
+                        if not bot.loop.is_closed():
+                            bot.loop.create_task(play_loop(guild_id, bot))
+
+                    try:
+                        bot.loop.call_soon_threadsafe(schedule_next_song)
+                    except RuntimeError:
+                        pass
+
+            try:
+                server_info.voice_client.play(audio_with_volume, after=after_playback)
+            except Exception:
+                audio_with_volume.cleanup()
+                raise
 
             # 성공적으로 재생이 시작되면 경고 플래그 초기화
             server_info.has_sent_403_warning = False

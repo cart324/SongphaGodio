@@ -83,15 +83,29 @@ def youtube_download(url: str) -> tuple:
     유튜브 영상에서 정보 추출
 
     :arg url: 유튜브 url
-    :return: (곡 제목, 곡 재생 url, 썸네일 url, 곡 길이(s))
+    :return: (곡 제목, 곡 재생 url, 썸네일 url, 곡 길이(s), 스트림 메타데이터)
     """
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             info = ydl.extract_info(url, download=False)
-        return info.get('title', '제목 없음'), info.get('url', None), info.get('thumbnail', neogulman), info.get('duration', 0)
+        stream_metadata = {
+            'availability': info.get('availability'),
+            'age_limit': info.get('age_limit'),
+            'playable_in_embed': info.get('playable_in_embed'),
+            'format_id': info.get('format_id'),
+            'yt_dlp_version': getattr(getattr(yt_dlp, 'version', None), '__version__', 'unknown'),
+            'http_headers': dict(info.get('http_headers') or {}),
+        }
+        return (
+            info.get('title', '제목 없음'),
+            info.get('url', None),
+            info.get('thumbnail', neogulman),
+            info.get('duration', 0),
+            stream_metadata,
+        )
     except Exception:
         print(f"[ERROR] youtube_download failed for {url}:\n{traceback.format_exc()}")
-        return '제목 없음', None, neogulman, 0
+        return '제목 없음', None, neogulman, 0, {}
 
 
 def youtube_playlist_extract(playlist_url: str) -> list or False:
@@ -341,15 +355,19 @@ async def preprocessing_song(url, bot: commands.Bot) -> dict:
         'cover': neogulman,
         'duration': "0:00",
         'volume': 0.2,
-        'volume_change': 100
+        'volume_change': 100,
+        'stream_metadata': {},
     }
     try:
         loop = asyncio.get_event_loop()
+        stream_metadata = {}
 
         # 유튜브 링크일 경우
         if youtube_pattern.match(url):
             # yt-dlp는 네트워크/외부 런타임 대기가 대부분이라 프로세스 생성 없이 스레드에서 처리합니다.
-            title, song_url, image, duration = await loop.run_in_executor(EXTRACTION_EXECUTOR, youtube_download, url)
+            title, song_url, image, duration, stream_metadata = await loop.run_in_executor(
+                EXTRACTION_EXECUTOR, youtube_download, url
+            )
 
             # 고정 볼륨
             volume_adjustment = 0.2
@@ -386,7 +404,8 @@ async def preprocessing_song(url, bot: commands.Bot) -> dict:
             'cover': image if image else neogulman,
             'duration': convert_sec_to_hour(duration),
             'volume': volume_adjustment,
-            'volume_change': 100
+            'volume_change': 100,
+            'stream_metadata': stream_metadata,
         }
         return song_dict
     except Exception:
@@ -422,21 +441,23 @@ async def async_normalize_volume(audio_url: str) -> float:
 # 새로 추가된 URL 갱신 로직
 # =========================================================
 
-def get_refreshed_url(original_url: str) -> str | None:
-    """단일 곡의 재생 URL을 다시 추출하는 동기 함수입니다."""
+def get_refreshed_stream(original_url: str) -> tuple[str | None, dict | None]:
+    """단일 곡의 재생 URL과 제한 메타데이터를 다시 추출합니다."""
     if youtube_pattern.match(original_url):
-        _, song_url, _, _ = youtube_download(original_url)
-        return song_url
-    elif google_drive_pattern.match(original_url):
+        _, song_url, _, _, stream_metadata = youtube_download(original_url)
+        return song_url, stream_metadata
+    if google_drive_pattern.match(original_url):
         _, song_url, _, _ = google_drive_download(original_url)
-        return song_url
-    return original_url
+        return song_url, {}
+    return original_url, None
 
-async def async_get_refreshed_url(original_url: str, loop, executor):
-    """비동기적으로 get_refreshed_url을 병렬 실행합니다."""
+
+async def async_get_refreshed_stream(original_url: str, loop, executor):
+    """비동기적으로 get_refreshed_stream을 병렬 실행합니다."""
     if re.compile(r'^(http|https)://').match(original_url):
-        return await loop.run_in_executor(executor, get_refreshed_url, original_url)
-    return original_url
+        return await loop.run_in_executor(executor, get_refreshed_stream, original_url)
+    return original_url, None
+
 
 async def refresh_song_urls(song_list: list) -> None:
     """큐에 있는 모든 인터넷 링크 곡의 재생 URL(play_url)을 새로 갱신합니다."""
@@ -445,10 +466,15 @@ async def refresh_song_urls(song_list: list) -> None:
 
     loop = asyncio.get_event_loop()
     # 재생목록 내의 모든 곡을 병렬로 다시 추출
-    tasks =[async_get_refreshed_url(song.get('original_url'), loop, EXTRACTION_EXECUTOR) for song in song_list]
+    tasks = [
+        async_get_refreshed_stream(song.get('original_url'), loop, EXTRACTION_EXECUTOR)
+        for song in song_list
+    ]
     results = await asyncio.gather(*tasks)
 
     # 추출 결과를 기존 리스트의 딕셔너리에 업데이트
-    for song, new_url in zip(song_list, results):
+    for song, (new_url, stream_metadata) in zip(song_list, results):
         if new_url:
             song['play_url'] = new_url
+            if stream_metadata is not None:
+                song['stream_metadata'] = stream_metadata
