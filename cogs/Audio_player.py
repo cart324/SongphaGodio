@@ -197,6 +197,50 @@ async def play_loop(guild_id: int, bot: commands.Bot) -> None:
 class AudioPlayer(commands.Cog, name="audio_player"):
     def __init__(self, bot):
         self.bot = bot
+        self._disconnect_locks = defaultdict(asyncio.Lock)
+
+    async def _close_player(self, guild: discord.Guild, *, disconnect: bool, auto_leave: bool = False) -> bool:
+        """Finalize one guild player exactly once across command and voice-state events."""
+        async with self._disconnect_locks[guild.id]:
+            server_info = server_info_dict[guild.id]
+            voice_client = guild.voice_client or server_info.voice_client
+            is_connected = voice_client is not None and voice_client.is_connected()
+
+            # A previous concurrent event already finalized this player. Pycord can briefly
+            # retain a disconnected VoiceClient object, so object existence alone is insufficient.
+            if (
+                not is_connected
+                and server_info.voice_client is None
+                and server_info.embed_channel is None
+                and server_info.embed_id is None
+            ):
+                return False
+
+            embed_channel = server_info.embed_channel
+            embed_id = server_info.embed_id
+
+            # Stop playback callbacks from starting another track while closing.
+            server_info.voice_client = None
+            server_info.queue.clear()
+            server_info.song_cache = None
+
+            if embed_channel is not None and embed_id is not None:
+                try:
+                    message = await embed_channel.fetch_message(embed_id)
+                    await message.edit(embed=discord.Embed(title="플레이어가 종료되었습니다."), view=None)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+                except Exception:
+                    await send_error_log(traceback.format_exc())
+
+            if disconnect and is_connected:
+                await voice_client.disconnect()
+
+            server_info_dict[guild.id] = ServerInfo()
+            handling_log('player_end', index1=guild.name)
+            if auto_leave:
+                handling_log('auto_leave')
+            return True
 
     async def _ensure_voice_connection(self, ctx: discord.ApplicationContext) -> bool:
         """봇이 음성 채널에 연결되어 있는지 확인하고, 연결되어 있지 않으면 연결을 시도합니다."""
@@ -594,16 +638,8 @@ class AudioPlayer(commands.Cog, name="audio_player"):
     async def leave(self, ctx):
         """노래 재생을 중단하고 음성 채널에서 퇴장합니다."""
         try:
-            server_info = server_info_dict[ctx.guild.id]
-
-            if ctx.voice_client:
-                embed = discord.Embed(title="플레이어가 종료되었습니다.")
-                message = await server_info.embed_channel.fetch_message(server_info.embed_id)
-                await message.edit(embed=embed, view=None)
-                await ctx.voice_client.disconnect()
-                server_info_dict[ctx.guild.id] = ServerInfo()  # 정보 초기화
+            if await self._close_player(ctx.guild, disconnect=True):
                 await ctx.respond("봇이 음성 채널에서 퇴장하였습니다.", ephemeral=True)
-                handling_log('player_end', index1=ctx.guild.name)
             else:
                 await ctx.respond("봇이 음성 채널에 있지 않습니다.", ephemeral=True)
         except Exception:
@@ -621,33 +657,30 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         사람이 없는 음성 채널에서 봇이 나가도록 처리합니다.
         """
         try:
-            # 봇이 속한 음성 채널
             guild = member.guild
-            voice_client = guild.voice_client
 
-            if not voice_client:  # 봇이 음성 채널에 연결되어 있지 않다면 무시
+            # Handle an external kick/forced disconnect even after guild.voice_client is cleared.
+            if self.bot.user and member.id == self.bot.user.id:
+                if before.channel is not None and after.channel is None:
+                    await self._close_player(guild, disconnect=False)
+                return
+
+            voice_client = guild.voice_client
+            if not voice_client:
                 return
 
             voice_channel = voice_client.channel
+            if (
+                voice_channel is None
+                or before.channel != voice_channel
+                or after.channel == before.channel
+            ):
+                return
 
-            # 음성 채널에 남아 있는 사용자 중 사람만 필터링
             human_members = [m for m in voice_channel.members if not m.bot]
-
-            # 사람이 없는 경우 봇이 음성 채널에서 나감
             if not human_members:
-                await voice_client.disconnect()
-
-                server_info = server_info_dict[guild.id]
-
-                embed = discord.Embed(title="플레이어가 종료되었습니다.")
-                message = await server_info.embed_channel.fetch_message(server_info.embed_id)
-                await message.edit(embed=embed, view=None)
-                server_info_dict[guild.id] = ServerInfo()  # 정보 초기화
-                handling_log('player_end', index1=guild.name)
-
-                handling_log('auto_leave')
+                await self._close_player(guild, disconnect=True, auto_leave=True)
         except Exception:
-            error_log = traceback.format_exc(limit=None, chain=True)
             await send_error_log(traceback.format_exc())
 
 
