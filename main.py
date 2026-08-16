@@ -190,6 +190,8 @@ async def sync_commands(ctx):
 @bot.slash_command(default_member_permissions=discord.Permissions(administrator=True), guild_ids=develop_server_ids)
 async def update(ctx):
     try:
+        await ctx.defer()
+
         if os.path.exists(project_name):    # 다운로드 폴더 확인
             shutil.rmtree(project_name, onerror=on_rm_error)
 
@@ -218,12 +220,15 @@ async def update(ctx):
         initial_cog_load()
 
         print_log("update completed")
-        await ctx.respond("업데이트가 완료되었습니다.")
+        await ctx.followup.send("업데이트가 완료되었습니다.")
 
     except Exception:
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
-        await ctx.respond("알 수 없는 오류입니다.")
+        if ctx.response.is_done():
+            await ctx.followup.send("알 수 없는 오류입니다.")
+        else:
+            await ctx.respond("알 수 없는 오류입니다.")
 
 
 # main 함수는 토큰을 인자로 받도록 다시 수정하는 것이 더 명확합니다.
