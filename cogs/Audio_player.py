@@ -545,6 +545,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
 
             if ctx.voice_client:
                 server_info.queue = []
+                server_info.is_loop = False
                 ctx.voice_client.stop()
                 server_info.log.append((ctx.author.display_name, 'stop', None, time.time()))  # 사용자 로깅
                 await ctx.respond("재생을 중지하고 재생목록을 초기화했습니다.", ephemeral=True)

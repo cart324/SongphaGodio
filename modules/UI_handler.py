@@ -219,6 +219,7 @@ async def stop_button(ita, server_info):
     try:
         if ita.guild.voice_client:
             server_info.queue.clear()
+            server_info.is_loop = False
             server_info.log.append((ita.user.display_name, 'stop', None, time.time()))
             ita.guild.voice_client.stop()
             await ita.response.send_message("재생을 중지하고 재생목록을 초기화했습니다.", ephemeral=True)
