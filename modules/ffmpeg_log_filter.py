@@ -16,6 +16,7 @@ KST = timezone(timedelta(hours=9))
 HTTP_403_PATTERN = re.compile(r"(?:http error|returned|status(?: code)?)\D*403\b|403 forbidden", re.IGNORECASE)
 GOOGLEVIDEO_URL_PATTERN = re.compile(r"https?://[^\s]*googlevideo\.com/[^\s]+", re.IGNORECASE)
 MAX_STDERR_BYTES = 128 * 1024
+AUDIO_FRAME_DURATION = 0.020
 
 
 @dataclass(frozen=True)
@@ -231,7 +232,7 @@ class BoundedStderrCapture:
 
 
 class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
-    """Capture FFmpeg stderr and report only useful, classified messages."""
+    """Capture FFmpeg stderr, pace PCM frames, and report useful messages."""
 
     def __init__(
         self,
@@ -245,6 +246,7 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
     ) -> None:
         self._cleanup_lock = threading.Lock()
         self._cleaned = True
+        self._next_frame_at: float | None = None
         self._stderr_capture = BoundedStderrCapture()
         self._stderr_context = {
             "play_url": source,
@@ -259,6 +261,20 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
             self._stderr_capture.finish()
             raise
         self._cleaned = False
+
+    def read(self) -> bytes:
+        frame = super().read()
+        if not frame:
+            return frame
+
+        now = time.perf_counter()
+        if self._next_frame_at is None or now >= self._next_frame_at:
+            self._next_frame_at = now + AUDIO_FRAME_DURATION
+            return frame
+
+        time.sleep(self._next_frame_at - now)
+        self._next_frame_at += AUDIO_FRAME_DURATION
+        return frame
 
     def cleanup(self) -> None:
         with self._cleanup_lock:
