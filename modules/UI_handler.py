@@ -218,11 +218,15 @@ async def stop_button(ita, server_info):
     """재생을 중지하고 재생목록 초기화"""
     try:
         if ita.guild.voice_client:
+            server_info.playback_end_token = None
+            server_info.url_refresh_token = None
             server_info.queue.clear()
             server_info.is_loop = False
+            server_info.song_cache = None
             server_info.log.append((ita.user.display_name, 'stop', None, time.time()))
             ita.guild.voice_client.stop()
             await ita.response.send_message("재생을 중지하고 재생목록을 초기화했습니다.", ephemeral=True)
+            await handling_embed(server_info)
         else:
             await ita.response.send_message("재생 중이 아닙니다.", ephemeral=True)
     except Exception:

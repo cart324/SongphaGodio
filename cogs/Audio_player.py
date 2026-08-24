@@ -3,7 +3,6 @@ from discord.ext import commands
 from collections import defaultdict
 import re
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import os
 import time
 import requests
@@ -11,11 +10,13 @@ import traceback
 from modules.error_notifier import send_error_log
 
 from modules.UI_handler import handling_embed, handling_log
-from modules.Song_processer import preprocessing_song, youtube_playlist_extract, refresh_song_urls
+from modules.Song_processer import EXTRACTION_EXECUTOR, preprocessing_song, youtube_playlist_extract, refresh_song_urls
 from modules.Song_processer import async_normalize_volume
-from modules.ffmpeg_log_filter import FilteredFFmpegPCMAudio
-
-BACKGROUND_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+from modules.ffmpeg_log_filter import (
+    AccessDeniedClassification,
+    FilteredFFmpegPCMAudio,
+    translate_http_403_cause,
+)
 
 LATEST_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -40,6 +41,7 @@ youtube_pattern = re.compile(r'^(http|https)://((www|m|music)\.)?(youtube\.com|y
 google_drive_pattern = re.compile(r'^(http|https)://(www\.)?drive\.google\.com/')
 
 VPN_IP = "121.133.106.37"
+PLAYLIST_DESCRIPTION_LIMIT = 3800
 
 
 # 서버별 정보 저장을 위한 클래스
@@ -53,30 +55,188 @@ class ServerInfo:
         self.embed_channel = None
         self.embed_id = None
         self.log = []
-        self.has_sent_403_warning = False  # 403 오류 메시지 발송 여부 플래그
+        self.playback_id = 0
+        self.playback_end_token = None
+        self.url_refresh_token = None
 
 
 # 참조한 서버ID가 없을 시 ServerInfo를 기본값으로 새로운 키:벨류 쌍 생성
 server_info_dict = defaultdict(ServerInfo)
 
 
-async def play_loop(guild_id: int, bot: commands.Bot) -> None:
+async def _refresh_and_retry_expired_stream(
+    guild_id: int,
+    bot: commands.Bot,
+    server_info: ServerInfo,
+    current_song: dict,
+    playback_id: int,
+    playback_end_token: object,
+) -> bool | None:
+    """Refresh one expired playback snapshot and retry it once.
+
+    Returns True when a retry was started, False when refresh failed, and None
+    when the player was stopped or replaced while refresh was in progress.
+    """
+    previous_url = current_song.get('play_url')
+    queue_reference = server_info.queue
+    refresh_token = object()
+    refresh_targets = []
+    seen_song_ids = set()
+    for song in (current_song, *list(queue_reference)):
+        song_id = id(song)
+        if song_id not in seen_song_ids:
+            seen_song_ids.add(song_id)
+            refresh_targets.append(song)
+
+    current_song['retried'] = True
+    server_info.url_refresh_token = refresh_token
+    refresh_failed = False
+
+    try:
+        try:
+            await refresh_song_urls(refresh_targets)
+        except Exception:
+            refresh_failed = True
+            await send_error_log(traceback.format_exc())
+
+        is_still_current = (
+            server_info_dict.get(guild_id) is server_info
+            and server_info.voice_client is not None
+            and server_info.playback_id == playback_id
+            and server_info.playback_end_token is playback_end_token
+            and server_info.song_cache is current_song
+            and server_info.queue is queue_reference
+            and server_info.url_refresh_token is refresh_token
+        )
+        if not is_still_current:
+            return None
+
+        refreshed_url = current_song.get('play_url')
+        if refresh_failed or not refreshed_url or refreshed_url == previous_url:
+            return False
+
+        # Clear the guard immediately before entering the retry loop. There is no
+        # event-loop yield between these operations, so another command cannot
+        # start a competing source in the middle.
+        server_info.url_refresh_token = None
+        server_info.playback_end_token = None
+        await play_loop(guild_id, bot, retry_song=current_song)
+        return True
+    finally:
+        if (
+            server_info_dict.get(guild_id) is server_info
+            and server_info.url_refresh_token is refresh_token
+        ):
+            server_info.url_refresh_token = None
+
+
+async def _handle_playback_end(
+    guild_id: int,
+    bot: commands.Bot,
+    server_info: ServerInfo,
+    current_song: dict,
+    playback_id: int,
+    playback_end_token: object,
+    classification: AccessDeniedClassification | None,
+) -> None:
+    """Handle one source completion on the bot event loop."""
+    if server_info_dict.get(guild_id) is not server_info or server_info.voice_client is None:
+        return
+
+    is_current_playback = (
+        server_info.playback_id == playback_id
+        and server_info.playback_end_token is playback_end_token
+        and server_info.song_cache is current_song
+    )
+    if not is_current_playback:
+        return
+
+    if classification is None:
+        current_song.pop('retried', None)
+        server_info.playback_end_token = None
+        await play_loop(guild_id, bot)
+        return
+
+    if (
+        classification.cause == 'expired_stream_url'
+        and not current_song.get('retried', False)
+    ):
+        retry_result = await _refresh_and_retry_expired_stream(
+            guild_id,
+            bot,
+            server_info,
+            current_song,
+            playback_id,
+            playback_end_token,
+        )
+        if retry_result is not False:
+            return
+
+    notification_message = None
+
+    if server_info.embed_channel:
+        title = current_song.get('title', '알 수 없는 곡')
+        cause = translate_http_403_cause(classification.cause)
+        notification_message = f"{title} 재생하는데 실패했습니다. ({cause})"
+
+    # A failed looped song must not be selected again by the next play_loop call.
+    server_info.song_cache = None
+    server_info.playback_end_token = None
+
+    # Start the next song before waiting for the Discord message request. A newer
+    # playback means another command already continued the queue for us.
+    await play_loop(guild_id, bot)
+
+    if (
+        notification_message is not None
+        and server_info_dict.get(guild_id) is server_info
+        and server_info.voice_client is not None
+        and server_info.embed_channel is not None
+    ):
+        try:
+            await server_info.embed_channel.send(
+                notification_message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            pass
+        except Exception:
+            await send_error_log(traceback.format_exc())
+
+
+async def play_loop(guild_id: int, bot: commands.Bot, retry_song: dict | None = None) -> None:
     """재생이 끝날 때 마다 queue에서 노래를 하나씩 불러와 반복 실행되는 루프 함수"""
     server_info = server_info_dict[guild_id]
     try:
+        # URL 갱신 중 호출된 일반 재생 루프는 갱신 작업이 이어서 처리합니다.
+        if (
+            retry_song is None
+            and (
+                server_info.playback_end_token is not None
+                or server_info.url_refresh_token is not None
+            )
+        ):
+            return
+
         # 연결이 의도적으로 종료됐을 때 루프 종료 (ex: /leave)
         if server_info.voice_client is None:
             return
 
+        # 여러 명령이 동시에 재생 루프를 요청해도 활성 source를 덮어쓰지 않습니다.
+        if server_info.voice_client.is_playing() or server_info.voice_client.is_paused():
+            return
+
         # 다음 재생곡이 없고 루프 중이 아닐 때 루프 종료
-        elif len(server_info.queue) == 0 and not server_info.is_loop:
+        elif retry_song is None and len(server_info.queue) == 0 and not server_info.is_loop:
             server_info.song_cache = None
             await handling_embed(server_info)
 
         else:
             current_song = None
+            if retry_song is not None:
+                current_song = retry_song
             # 루프 중일 때는 캐쉬 갱신 안함
-            if server_info.is_loop and (server_info.song_cache is not None):
+            elif server_info.is_loop and (server_info.song_cache is not None):
                 current_song = server_info.song_cache
             else:
                 # 셔플 중 랜덤 팝업
@@ -109,15 +269,31 @@ async def play_loop(guild_id: int, bot: commands.Bot) -> None:
                 **option,
             )
             audio_with_volume = discord.PCMVolumeTransformer(source, volume=current_song['volume'])
+            server_info.playback_id += 1
+            playback_id = server_info.playback_id
+            playback_end_token = object()
+            server_info.playback_end_token = playback_end_token
 
             def after_playback(_error):
                 # Pycord는 자체 cleanup보다 after를 먼저 호출하므로 여기서 FFmpeg를 먼저 종료합니다.
                 try:
                     audio_with_volume.cleanup()
                 finally:
+                    classification = source.consume_access_denied_classification()
+
                     def schedule_next_song():
                         if not bot.loop.is_closed():
-                            bot.loop.create_task(play_loop(guild_id, bot))
+                            bot.loop.create_task(
+                                _handle_playback_end(
+                                    guild_id,
+                                    bot,
+                                    server_info,
+                                    current_song,
+                                    playback_id,
+                                    playback_end_token,
+                                    classification,
+                                )
+                            )
 
                     try:
                         bot.loop.call_soon_threadsafe(schedule_next_song)
@@ -128,97 +304,42 @@ async def play_loop(guild_id: int, bot: commands.Bot) -> None:
                 server_info.voice_client.play(audio_with_volume, after=after_playback)
             except Exception:
                 audio_with_volume.cleanup()
+                classification = source.consume_access_denied_classification()
+                if classification is not None:
+                    await _handle_playback_end(
+                        guild_id,
+                        bot,
+                        server_info,
+                        current_song,
+                        playback_id,
+                        playback_end_token,
+                        classification,
+                    )
+                    return
                 raise
-
-            # 성공적으로 재생이 시작되면 경고 플래그 초기화
-            server_info.has_sent_403_warning = False
-            # URL을 갱신했던 재시도 플래그 초기화
-            if 'retried' in current_song:
-                del current_song['retried']
 
             await handling_embed(server_info)
             handling_log('play_queue', song_title=current_song['title'], index1=len(server_info.queue))
 
-    except Exception as e:
-        error_log = traceback.format_exc(limit=None, chain=True)
-
-        # 403 Forbidden 오류 처리
-        if "403 Forbidden" in str(e) or "403 Forbidden" in error_log:
-            if server_info.song_cache:
-                # 1. 처음 오류가 발생했을 경우 (재시도 플래그가 없을 때)
-                if not server_info.song_cache.get('retried', False):
-                    print(f"403 Forbidden error in guild {guild_id}. Silently refreshing URLs and retrying.")
-                    server_info.song_cache['retried'] = True
-                    # 현재 곡을 다시 큐의 최상단에 추가 (재시도용)
-                    server_info.queue.insert(0, server_info.song_cache)
-                    server_info.song_cache = None
-
-                    try:
-                        # 큐에 있는 모든 인터넷 링크 곡의 URL 갱신 (조용하게 진행)
-                        await refresh_song_urls(server_info.queue)
-                    except Exception as refresh_err:
-                        print(f"Failed to refresh URLs: {refresh_err}")
-
-                # 2. 링크를 갱신하고 재시도했음에도 또 실패했을 경우 (yt_dlp 버전/구조 문제 의심)
-                else:
-                    print(f"Song already retried and failed, skipping: {server_info.song_cache.get('title')}")
-
-                    # 도배 방지를 위해 서버당 1번만 발송
-                    if not server_info.has_sent_403_warning:
-                        server_info.has_sent_403_warning = True
-
-                        # 서버 채널에 안내 메시지 전송
-                        if server_info.embed_channel:
-                            try:
-                                await server_info.embed_channel.send(
-                                    "곡 재생에 실패하여 곡을 건너뜁니다."
-                                )
-                            except Exception as channel_error:
-                                print(f"Failed to send 403 error message to channel: {channel_error}")
-
-                        # 관리자에게 DM 발송 (yt_dlp 이슈 의심)
-                        try:
-                            guild = bot.get_guild(guild_id)
-                            guild_name = guild.name if guild else "알 수 없는 서버"
-                            requester_name = server_info.song_cache.get('requester', '알 수 없는 사용자')
-
-                            dm_message = (
-                                f""
-                                f"HTTP 403 Forbidden 오류 발생 (재시도 실패)\n"
-                                f"서버 = {guild_name}\n"
-                                f"요청자 = {requester_name}\n"
-                                f"곡 제목 = {server_info.song_cache.get('title', '알 수 없음')}\n"
-                                f"{error_log}"
-                                f""
-                            )
-                            await send_error_log(dm_message)
-                        except Exception:
-                            pass
-
-                    # 실패한 곡이므로 건너뛰기 위해 캐시를 완전히 비움
-                    server_info.song_cache = None
-
-            # 오류 처리(갱신 후 재진입 또는 스킵)가 끝나면 다음 재생을 위해 루프 재호출
-            bot.loop.create_task(play_loop(guild_id, bot))
-
-        # 그 외 다른 오류 처리 (기존 로직 유지)
-        else:
-            await send_error_log(traceback.format_exc())
-            if server_info.embed_channel:
-                try:
-                    await server_info.embed_channel.send("재생 중 알 수 없는 오류가 발생하여 플레이어를 중지합니다.")
-                except Exception as channel_e:
-                    print(f"Failed to send message to channel: {channel_e}")
-
-            # Cleanup
-            if server_info.voice_client and server_info.voice_client.is_connected():
-                server_info.voice_client.stop()
-            server_info.queue.clear()
-            server_info.song_cache = None
+    except Exception:
+        await send_error_log(traceback.format_exc())
+        if server_info.embed_channel:
             try:
-                await handling_embed(server_info)
-            except Exception as embed_e:
-                print(f"Failed to update embed during play_loop cleanup: {embed_e}")
+                await server_info.embed_channel.send("재생 중 알 수 없는 오류가 발생하여 플레이어를 중지합니다.")
+            except Exception:
+                await send_error_log(traceback.format_exc())
+
+        # Cleanup
+        if server_info.voice_client and server_info.voice_client.is_connected():
+            server_info.voice_client.stop()
+        server_info.queue.clear()
+        server_info.song_cache = None
+        server_info.playback_end_token = None
+        server_info.url_refresh_token = None
+        try:
+            await handling_embed(server_info)
+        except Exception:
+            await send_error_log(traceback.format_exc())
 
 
 class AudioPlayer(commands.Cog, name="audio_player"):
@@ -248,6 +369,8 @@ class AudioPlayer(commands.Cog, name="audio_player"):
 
             # Stop playback callbacks from starting another track while closing.
             server_info.voice_client = None
+            server_info.playback_end_token = None
+            server_info.url_refresh_token = None
             server_info.queue.clear()
             server_info.song_cache = None
 
@@ -293,7 +416,6 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             return None
 
         song_info_dict['requester'] = author.display_name
-        handling_log('play', user_name=author.name, song_title=song_info_dict['title'])
         return song_info_dict
 
     @commands.slash_command()
@@ -321,9 +443,16 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 return
 
             server_info.queue.append(song_info_dict)
+            handling_log('play', user_name=ctx.author.name, song_title=song_info_dict['title'])
 
             # 현재 재생 중이 아닐 경우 플레이 루프 시작
-            if not ctx.voice_client.is_playing():
+            if (
+                not ctx.voice_client.is_playing()
+                and not ctx.voice_client.is_paused()
+                and server_info.song_cache is None
+                and server_info.playback_end_token is None
+                and server_info.url_refresh_token is None
+            ):
                 await play_loop(ctx.guild.id, self.bot)
             else:
                 await handling_embed(server_info)
@@ -355,7 +484,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             # 유튜브 링크일 경우
             if youtube_pattern.match(playlist_url):
                 loop = asyncio.get_event_loop()
-                song_list = await loop.run_in_executor(BACKGROUND_EXECUTOR, youtube_playlist_extract, playlist_url)
+                song_list = await loop.run_in_executor(EXTRACTION_EXECUTOR, youtube_playlist_extract, playlist_url)
 
                 if song_list is False:
                     await ctx.followup.send("정보를 불러오는데 실패하였습니다.", ephemeral=True)
@@ -378,18 +507,73 @@ class AudioPlayer(commands.Cog, name="audio_player"):
 
             handling_log('playlist', user_name=ctx.author.name, index1=len(song_list))
             added_songs_text = ""
+            added_song_count = 0
+            omitted_song_count = 0
+            playlist_cancelled = False
 
-            is_first_song_added = not ctx.voice_client.is_playing()
+            for playlist_index, (url, title) in enumerate(song_list, start=1):
+                if (
+                    server_info_dict.get(ctx.guild.id) is not server_info
+                    or server_info.voice_client is None
+                ):
+                    playlist_cancelled = True
+                    break
 
-            for url, title in song_list:
                 song_info_dict = await self._add_song_to_queue(ctx.author, url)
+
+                # /leave가 추출 도중 실행됐다면 방금 추출한 곡도 큐에 넣지 않습니다.
+                if (
+                    server_info_dict.get(ctx.guild.id) is not server_info
+                    or server_info.voice_client is None
+                ):
+                    playlist_cancelled = True
+                    break
+
                 if song_info_dict:
                     server_info.queue.append(song_info_dict)
-                    added_songs_text += f"{len(added_songs_text.splitlines()) + 1}. {title}\n"
+                    handling_log(
+                        'playlist_play',
+                        user_name=ctx.author.name,
+                        song_title=song_info_dict['title'],
+                        index1=playlist_index,
+                        index2=len(song_list),
+                    )
+                    added_song_count += 1
+                    song_line = f"{added_song_count}. {title}\n"
+                    if (
+                        omitted_song_count > 0
+                        or len(added_songs_text) + len(song_line) > PLAYLIST_DESCRIPTION_LIMIT
+                    ):
+                        omitted_song_count += 1
+                    else:
+                        added_songs_text += song_line
 
-            # 재생 중이 아니었고, 곡이 추가되었을 경우 플레이 루프 시작
-            if is_first_song_added and len(server_info.queue) > 0:
-                await play_loop(ctx.guild.id, self.bot)
+                    # 첫 곡이 준비되는 즉시 재생하고, 재생목록 추출은 계속 진행합니다.
+                    if (
+                        server_info.song_cache is None
+                        and server_info.playback_end_token is None
+                        and server_info.url_refresh_token is None
+                        and not server_info.voice_client.is_playing()
+                        and not server_info.voice_client.is_paused()
+                    ):
+                        await play_loop(ctx.guild.id, self.bot)
+
+            if (
+                playlist_cancelled
+                or server_info_dict.get(ctx.guild.id) is not server_info
+                or server_info.voice_client is None
+            ):
+                await ctx.followup.send(
+                    "봇이 음성 채널에서 퇴장하여 플레이리스트 추가를 중단했습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            if omitted_song_count > 0:
+                omitted_text = f"... 외 {omitted_song_count}곡"
+                available_length = PLAYLIST_DESCRIPTION_LIMIT - len(omitted_text) - 1
+                added_songs_text = added_songs_text[:max(0, available_length)].rstrip()
+                added_songs_text = f"{added_songs_text}\n{omitted_text}" if added_songs_text else omitted_text
 
             await handling_embed(server_info)
 
@@ -544,11 +728,15 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             server_info = server_info_dict[ctx.guild.id]
 
             if ctx.voice_client:
+                server_info.playback_end_token = None
+                server_info.url_refresh_token = None
                 server_info.queue = []
                 server_info.is_loop = False
+                server_info.song_cache = None
                 ctx.voice_client.stop()
                 server_info.log.append((ctx.author.display_name, 'stop', None, time.time()))  # 사용자 로깅
                 await ctx.respond("재생을 중지하고 재생목록을 초기화했습니다.", ephemeral=True)
+                await handling_embed(server_info)
             else:
                 await ctx.respond("재생 중이 아닙니다.", ephemeral=True)
         except Exception:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, urlparse
 import os
 import re
@@ -15,14 +15,33 @@ import discord
 KST = timezone(timedelta(hours=9))
 HTTP_403_PATTERN = re.compile(r"(?:http error|returned|status(?: code)?)\D*403\b|403 forbidden", re.IGNORECASE)
 GOOGLEVIDEO_URL_PATTERN = re.compile(r"https?://[^\s]*googlevideo\.com/[^\s]+", re.IGNORECASE)
+RECONNECT_PATTERN = re.compile(
+    r"will reconnect at\s+(?P<offset>\d+)\s+in\s+(?P<delay>\d+)\s+second\(s\),\s*"
+    r"error=connection reset by peer",
+    re.IGNORECASE,
+)
 MAX_STDERR_BYTES = 128 * 1024
 AUDIO_FRAME_DURATION = 0.020
+HTTP_403_CAUSE_TRANSLATIONS = {
+    "remote_access_denied": "원격 서버에서 접근 거부",
+    "expired_stream_url": "재생 주소 만료",
+    "configured_egress_ip_mismatch": "재생 주소와 접속 IP 불일치",
+    "authentication_or_entitlement_required": "로그인 또는 시청 권한 필요",
+    "age_restricted_request_context": "연령 제한 인증 필요",
+    "embed_playback_restricted": "외부 플레이어 재생 제한",
+    "youtube_cdn_access_denied": "YouTube 서버에서 재생 요청 거부",
+    "youtube_access_context_rejected": "YouTube에서 재생 요청 환경 거부",
+}
 
 
 @dataclass(frozen=True)
 class AccessDeniedClassification:
     cause: str
     details: tuple[str, ...]
+
+
+def translate_http_403_cause(cause: str) -> str:
+    return HTTP_403_CAUSE_TRANSLATIONS.get(cause, "접근 거부 원인 확인 불가")
 
 
 def _query_value(query: Mapping[str, list[str]], key: str) -> str | None:
@@ -41,6 +60,17 @@ def _masked_ip(ip_address: str | None) -> str:
 
 def _safe_title(title: str | None) -> str:
     return (title or "unknown").replace("\r", " ").replace("\n", " ").replace('"', "'")[:160]
+
+
+def _format_reconnect_log(line: str, *, song_title: str | None, guild_name: str) -> str | None:
+    match = RECONNECT_PATTERN.search(line)
+    if match is None:
+        return None
+    return (
+        f'[FFMPEG RECONNECT] guild="{_safe_title(guild_name)}" '
+        f'title="{_safe_title(song_title)}" reason=connection_reset '
+        f'offset={match.group("offset")} delay={match.group("delay")}s'
+    )
 
 
 def classify_http_403(
@@ -155,6 +185,7 @@ def report_ffmpeg_stderr(
     guild_name: str,
     stream_metadata: Mapping[str, Any] | None = None,
     expected_ip: str | None = None,
+    classification_callback: Callable[[AccessDeniedClassification], None] | None = None,
 ) -> bool:
     """Hide known FFmpeg network noise and print one classified line for HTTP 403."""
     if isinstance(stderr_output, bytes):
@@ -175,6 +206,8 @@ def report_ffmpeg_stderr(
             f'[FFMPEG 403] cause={classification.cause} guild="{_safe_title(guild_name)}" '
             f'title="{_safe_title(song_title)}" {detail_text}'.rstrip()
         )
+        if classification_callback is not None:
+            classification_callback(classification)
         return True
 
     for line in lines:
@@ -193,8 +226,14 @@ def report_ffmpeg_stderr(
 class BoundedStderrCapture:
     """Continuously drain a pipe while retaining only the newest stderr bytes."""
 
-    def __init__(self, max_bytes: int = MAX_STDERR_BYTES) -> None:
+    def __init__(
+        self,
+        max_bytes: int = MAX_STDERR_BYTES,
+        line_callback: Callable[[str], None] | None = None,
+    ) -> None:
         self._max_bytes = max_bytes
+        self._line_callback = line_callback
+        self._line_buffer = bytearray()
         self._buffer = bytearray()
         self._buffer_lock = threading.Lock()
         self._finish_lock = threading.Lock()
@@ -212,13 +251,36 @@ class BoundedStderrCapture:
     def _drain(self) -> None:
         try:
             while chunk := self._reader.read(8192):
+                self._handle_lines(chunk)
                 with self._buffer_lock:
                     self._buffer.extend(chunk)
                     overflow = len(self._buffer) - self._max_bytes
                     if overflow > 0:
                         del self._buffer[:overflow]
         finally:
+            if self._line_callback is not None and self._line_buffer:
+                self._emit_line(bytes(self._line_buffer))
+                self._line_buffer.clear()
             self._reader.close()
+
+    def _handle_lines(self, chunk: bytes) -> None:
+        if self._line_callback is None:
+            return
+
+        self._line_buffer.extend(chunk)
+        while (newline_index := self._line_buffer.find(b"\n")) >= 0:
+            line = bytes(self._line_buffer[:newline_index])
+            del self._line_buffer[:newline_index + 1]
+            self._emit_line(line)
+
+        if len(self._line_buffer) > self._max_bytes:
+            del self._line_buffer[:-self._max_bytes]
+
+    def _emit_line(self, line: bytes) -> None:
+        try:
+            self._line_callback(line.decode("utf-8", errors="replace").rstrip("\r"))
+        except Exception as error:
+            print(f"[WARNING] Failed to inspect live FFmpeg stderr: {error}")
 
     def finish(self) -> bytes:
         with self._finish_lock:
@@ -245,9 +307,10 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
         **ffmpeg_options: Any,
     ) -> None:
         self._cleanup_lock = threading.Lock()
+        self._classification_lock = threading.Lock()
         self._cleaned = True
+        self._access_denied_classification: AccessDeniedClassification | None = None
         self._next_frame_at: float | None = None
-        self._stderr_capture = BoundedStderrCapture()
         self._stderr_context = {
             "play_url": source,
             "song_title": song_title,
@@ -255,12 +318,32 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
             "stream_metadata": dict(stream_metadata or {}),
             "expected_ip": expected_ip,
         }
+        self._stderr_capture = BoundedStderrCapture(line_callback=self._report_reconnect_line)
         try:
             super().__init__(source, stderr=self._stderr_capture.writer, **ffmpeg_options)
         except Exception:
             self._stderr_capture.finish()
             raise
         self._cleaned = False
+
+    def _remember_access_denied(self, classification: AccessDeniedClassification) -> None:
+        with self._classification_lock:
+            self._access_denied_classification = classification
+
+    def _report_reconnect_line(self, line: str) -> None:
+        message = _format_reconnect_log(
+            line,
+            song_title=self._stderr_context["song_title"],
+            guild_name=self._stderr_context["guild_name"],
+        )
+        if message is not None:
+            print(message)
+
+    def consume_access_denied_classification(self) -> AccessDeniedClassification | None:
+        with self._classification_lock:
+            classification = self._access_denied_classification
+            self._access_denied_classification = None
+            return classification
 
     def read(self) -> bytes:
         frame = super().read()
@@ -282,11 +365,15 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
                 return
             self._cleaned = True
 
-        try:
-            super().cleanup()
-        finally:
             try:
-                stderr_output = self._stderr_capture.finish()
-                report_ffmpeg_stderr(stderr_output, **self._stderr_context)
-            except Exception as error:
-                print(f"[WARNING] Failed to inspect FFmpeg stderr: {error}")
+                super().cleanup()
+            finally:
+                try:
+                    stderr_output = self._stderr_capture.finish()
+                    report_ffmpeg_stderr(
+                        stderr_output,
+                        **self._stderr_context,
+                        classification_callback=self._remember_access_denied,
+                    )
+                except Exception as error:
+                    print(f"[WARNING] Failed to inspect FFmpeg stderr: {error}")

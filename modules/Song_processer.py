@@ -8,6 +8,7 @@ from discord.ext import commands
 import os
 import json
 import shutil
+import threading
 from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3
@@ -16,7 +17,36 @@ from io import BytesIO
 import traceback
 
 
-EXTRACTION_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+EXTRACTION_MAX_WORKERS = 3
+EXTRACTION_NICE = 5
+EXTRACTION_CPU_LIMIT = 3
+
+
+def _initialize_extraction_worker() -> None:
+    """Keep extraction workers and their child processes away from one playback CPU."""
+    thread_id = threading.get_native_id()
+
+    if hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity"):
+        try:
+            available_cpus = sorted(os.sched_getaffinity(thread_id))
+            if len(available_cpus) > 1:
+                extraction_cpus = set(available_cpus[1:1 + EXTRACTION_CPU_LIMIT])
+                os.sched_setaffinity(thread_id, extraction_cpus)
+        except OSError as error:
+            print(f"[WARNING] Failed to limit extraction CPU affinity: {error}")
+
+    if hasattr(os, "setpriority") and hasattr(os, "PRIO_PROCESS"):
+        try:
+            os.setpriority(os.PRIO_PROCESS, thread_id, EXTRACTION_NICE)
+        except OSError as error:
+            print(f"[WARNING] Failed to lower extraction worker priority: {error}")
+
+
+EXTRACTION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=EXTRACTION_MAX_WORKERS,
+    thread_name_prefix="song-extraction",
+    initializer=_initialize_extraction_worker,
+)
 _VOLUME_EXECUTOR = None
 
 

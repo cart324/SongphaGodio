@@ -166,14 +166,17 @@ async def load_cog(ctx, cog_name: discord.Option(str)):
 
 @bot.slash_command(default_member_permissions=discord.Permissions(administrator=True), guild_ids=develop_server_ids)
 async def reload_bot(ctx):
+    response_sent = False
     try:
-        unload_all_cogs()
-        initial_cog_load()
-        await ctx.respond("봇을 재시작 하였습니다.")
+        await ctx.respond("봇을 재시작합니다.")
+        response_sent = True
+        bot.restart_reason = 'update'
+        await bot.close()
     except Exception:
         print_log(f"error has been occurred")
         await send_error_log(traceback.format_exc(), ctx.author.name)
-        await ctx.respond("알 수 없는 오류입니다.")
+        if not response_sent:
+            await ctx.respond("알 수 없는 오류입니다.")
 
 
 @bot.slash_command(default_member_permissions=discord.Permissions(administrator=True), guild_ids=develop_server_ids)
@@ -221,6 +224,8 @@ async def update(ctx):
 
         print_log("update completed")
         await ctx.followup.send("업데이트가 완료되었습니다.")
+        bot.restart_reason = 'update'
+        await bot.close()
 
     except Exception:
         print_log(f"error has been occurred")
