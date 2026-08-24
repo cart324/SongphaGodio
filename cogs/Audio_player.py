@@ -25,6 +25,7 @@ LATEST_USER_AGENT = (
 FFMPEG_OPTIONS = {
     'before_options': (
         '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
+        '-thread_queue_size 4096 '
         f'-user_agent "{LATEST_USER_AGENT}" '  # User-Agent 옵션 추가
         '-analyzeduration 20M -probesize 20M '
         '-rw_timeout 30000000'
@@ -42,6 +43,39 @@ google_drive_pattern = re.compile(r'^(http|https)://(www\.)?drive\.google\.com/'
 
 VPN_IP = "121.133.106.37"
 PLAYLIST_DESCRIPTION_LIMIT = 3800
+
+
+def _pin_playback_workers(voice_client, source) -> None:
+    """Keep FFmpeg and Discord's voice sender on the CPU reserved from extraction."""
+    if not hasattr(os, 'sched_getaffinity') or not hasattr(os, 'sched_setaffinity'):
+        return
+
+    try:
+        available_cpus = sorted(os.sched_getaffinity(0))
+    except OSError as error:
+        print(f"[WARNING] Failed to inspect playback CPU affinity: {error}")
+        return
+
+    if len(available_cpus) < 2:
+        return
+
+    playback_cpus = {available_cpus[0]}
+    ffmpeg_process = getattr(source, '_process', None)
+    player_thread = getattr(voice_client, '_player', None)
+    targets = (
+        ('FFmpeg', getattr(ffmpeg_process, 'pid', None)),
+        ('voice sender', getattr(player_thread, 'native_id', None)),
+    )
+
+    for target_name, target_id in targets:
+        if target_id is None:
+            continue
+        try:
+            os.sched_setaffinity(target_id, playback_cpus)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            print(f"[WARNING] Failed to pin {target_name} CPU affinity: {error}")
 
 
 # 서버별 정보 저장을 위한 클래스
@@ -302,6 +336,7 @@ async def play_loop(guild_id: int, bot: commands.Bot, retry_song: dict | None = 
 
             try:
                 server_info.voice_client.play(audio_with_volume, after=after_playback)
+                _pin_playback_workers(server_info.voice_client, source)
             except Exception:
                 audio_with_volume.cleanup()
                 classification = source.consume_access_denied_classification()

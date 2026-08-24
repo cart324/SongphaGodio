@@ -1,13 +1,12 @@
 import re
 import asyncio
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-import yt_dlp
 import subprocess
 import discord
 from discord.ext import commands
 import os
 import json
-import shutil
+import sys
 import threading
 from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
@@ -48,6 +47,8 @@ EXTRACTION_EXECUTOR = ThreadPoolExecutor(
     initializer=_initialize_extraction_worker,
 )
 _VOLUME_EXECUTOR = None
+YOUTUBE_WORKER_TIMEOUT = 120
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def get_volume_executor() -> ProcessPoolExecutor:
@@ -57,44 +58,6 @@ def get_volume_executor() -> ProcessPoolExecutor:
         _VOLUME_EXECUTOR = ProcessPoolExecutor(max_workers=1)
     return _VOLUME_EXECUTOR
 
-
-def _find_js_runtime() -> dict:
-    """Return a yt-dlp js_runtimes config for the first supported runtime found."""
-    runtime_candidates = (
-        ("deno", os.path.expanduser("~/.deno/bin/deno")),
-        ("deno", shutil.which("deno")),
-        ("node", shutil.which("node")),
-        ("node", shutil.which("nodejs")),
-        ("bun", shutil.which("bun")),
-        ("quickjs", shutil.which("qjs")),
-    )
-
-    for runtime, path in runtime_candidates:
-        if path and os.path.exists(path):
-            return {runtime: {"path": path}}
-    return {"deno": {}}
-
-
-BASE_YDL_OPTIONS = {
-    'format': 'bestaudio/best',
-    'quiet': True,
-    'listformats': False,
-    'postprocessor_args': [],
-    'js_runtimes': _find_js_runtime(),
-}
-
-# 영상 추출용 yt-dlp 설정
-YDL_OPTIONS = {
-    **BASE_YDL_OPTIONS,
-    'noplaylist': True,
-}
-
-# 플레이리스트 추출용 yt-dlp 옵션 설정
-YDL_PLAYLIST_OPTIONS = {
-    **BASE_YDL_OPTIONS,
-    'extract_flat': 'in_playlist',
-    'ignoreerrors': True,
-}
 
 # URL 패턴
 youtube_pattern = re.compile(r'^(http|https)://((www|m|music)\.)?(youtube\.com|youtu\.be)/')
@@ -108,62 +71,52 @@ neogulman = "https://cdn.discordapp.com/attachments/469870241699069963/125923301
 cover_channel = 1337411762252681279
 
 
-def youtube_download(url: str) -> tuple:
-    """
-    유튜브 영상에서 정보 추출
+def _run_youtube_worker(operation: str, url: str):
+    """Run yt-dlp outside the bot process so extraction cannot block voice packet timing."""
+    request = json.dumps({'url': url, 'fallback_thumbnail': neogulman}, ensure_ascii=False)
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+    completed = subprocess.run(
+        [sys.executable, '-m', 'modules.youtube_extract_worker', operation],
+        input=request,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        cwd=PROJECT_ROOT,
+        timeout=YOUTUBE_WORKER_TIMEOUT,
+        creationflags=creationflags,
+    )
 
-    :arg url: 유튜브 url
-    :return: (곡 제목, 곡 재생 url, 썸네일 url, 곡 길이(s), 스트림 메타데이터)
-    """
     try:
-        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-            info = ydl.extract_info(url, download=False)
-        stream_metadata = {
-            'availability': info.get('availability'),
-            'age_limit': info.get('age_limit'),
-            'playable_in_embed': info.get('playable_in_embed'),
-            'format_id': info.get('format_id'),
-            'yt_dlp_version': getattr(getattr(yt_dlp, 'version', None), '__version__', 'unknown'),
-            'http_headers': dict(info.get('http_headers') or {}),
-        }
-        return (
-            info.get('title', '제목 없음'),
-            info.get('url', None),
-            info.get('thumbnail', neogulman),
-            info.get('duration', 0),
-            stream_metadata,
-        )
+        response = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError('yt-dlp worker returned an invalid response') from error
+
+    if completed.returncode != 0 or not response.get('ok'):
+        error_text = response.get('error') or completed.stderr or 'unknown worker error'
+        raise RuntimeError(error_text[-4000:])
+    return response.get('result')
+
+
+def youtube_download(url: str) -> tuple:
+    """유튜브 영상 정보를 별도 프로세스에서 추출합니다."""
+    try:
+        result = _run_youtube_worker('video', url)
+        if not isinstance(result, list) or len(result) != 5:
+            raise RuntimeError('yt-dlp worker returned incomplete video information')
+        return tuple(result)
     except Exception:
         print(f"[ERROR] youtube_download failed for {url}:\n{traceback.format_exc()}")
         return '제목 없음', None, neogulman, 0, {}
 
 
 def youtube_playlist_extract(playlist_url: str) -> list or False:
-    """유튜브 링크에서 플레이리스트 목록을 추출하는 함수. 실패시 False 반환"""
-    video_list = []
-
+    """유튜브 플레이리스트 목록을 별도 프로세스에서 추출합니다."""
     try:
-        with yt_dlp.YoutubeDL(YDL_PLAYLIST_OPTIONS) as ydl:
-            # 플레이리스트 정보 추출
-            playlist_info = ydl.extract_info(playlist_url, download=False)
-
-            if 'entries' in playlist_info:
-                for entry in playlist_info['entries']:
-                    # entry가 None인 경우(오류로 건너뛴 영상)를 처리
-                    if entry and entry.get('title'):
-                        entry_url = entry.get('webpage_url') or entry.get('original_url') or entry.get('url')
-                        if entry_url and not re.compile(r'^(http|https)://').match(entry_url):
-                            entry_id = entry.get('id') or entry_url
-                            entry_url = f"https://www.youtube.com/watch?v={entry_id}"
-
-                        if entry_url:
-                            video_list.append((entry_url, entry['title']))
-
-                return video_list if video_list else False  # 추가된 영상이 하나도 없으면 False 반환
-            else:
-                return False
-    except Exception as e:
-        # ignoreerrors로도 해결 안 되는 네트워크 오류나 잘못된 URL 등의 예외 처리
+        result = _run_youtube_worker('playlist', playlist_url)
+        if result is False:
+            return False
+        return [(url, title) for url, title in result]
+    except Exception:
         print(f"[ERROR] youtube_playlist_extract failed for {playlist_url}:\n{traceback.format_exc()}")
         return False
 
