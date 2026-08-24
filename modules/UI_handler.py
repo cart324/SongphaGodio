@@ -139,7 +139,7 @@ class PlayerUISuperClass(discord.ui.View):
                 options.append(discord.SelectOption(label=label, value=str(index)))
 
             if len(queue_list) > 25:
-                options.append(discord.SelectOption(label=f"위 목록 외 {len(queue_list)-24}개의 재생목록이 있습니다.", value="more"))
+                options.append(discord.SelectOption(label=f"위 목록 외 {len(queue_list)-24}개의 재생목록이 있습니다. 전체 재생목록을 보려면 클릭하세요.", value="more"))
 
             # Select 컴포넌트 생성
             select = discord.ui.Select(
@@ -150,7 +150,10 @@ class PlayerUISuperClass(discord.ui.View):
             async def select_callback(interaction: discord.Interaction):
                 try:
                     if not select.values or select.values[0] == "more":
-                        await interaction.response.defer(ephemeral=True, thinking=False)
+                        text = ""
+                        for i in queue_list:
+                            text += f"{queue_list.index(i)+1}. {i.get('title', '제목 없음')} || {i.get('requester', '알 수 없음')}\n"
+                        await interaction.response.send_message(f"```\n{text}\n```", ephemeral=True)
                         return
 
                     index = int(select.values[0])
