@@ -43,6 +43,7 @@ google_drive_pattern = re.compile(r'^(http|https)://(www\.)?drive\.google\.com/'
 
 VPN_IP = "121.133.106.37"
 PLAYLIST_DESCRIPTION_LIMIT = 3800
+AUTO_LEAVE_RECHECK_DELAY = 2.0
 
 
 def _pin_playback_workers(voice_client, source) -> None:
@@ -381,6 +382,22 @@ class AudioPlayer(commands.Cog, name="audio_player"):
     def __init__(self, bot):
         self.bot = bot
         self._disconnect_locks = defaultdict(asyncio.Lock)
+
+    def _voice_channel_has_human(self, guild, voice_channel) -> bool:
+        """Treat unknown cached members as human to avoid false automatic disconnects."""
+        voice_states = getattr(voice_channel, 'voice_states', None)
+        if voice_states is None:
+            return any(not member.bot for member in getattr(voice_channel, 'members', []))
+
+        bot_user_id = self.bot.user.id if self.bot.user else None
+        for member_id in voice_states:
+            if member_id == bot_user_id:
+                continue
+
+            cached_member = guild.get_member(member_id)
+            if cached_member is None or not cached_member.bot:
+                return True
+        return False
 
     async def _close_player(self, guild: discord.Guild, *, disconnect: bool, auto_leave: bool = False) -> bool:
         """Finalize one guild player exactly once across command and voice-state events."""
@@ -928,9 +945,21 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             ):
                 return
 
-            human_members = [m for m in voice_channel.members if not m.bot]
-            if not human_members:
-                await self._close_player(guild, disconnect=True, auto_leave=True)
+            if self._voice_channel_has_human(guild, voice_channel):
+                return
+
+            # Voice state/member caches can briefly look empty while one user leaves.
+            # Recheck the same guild and channel before terminating the player.
+            await asyncio.sleep(AUTO_LEAVE_RECHECK_DELAY)
+            current_voice_client = guild.voice_client
+            if (
+                current_voice_client is None
+                or current_voice_client.channel != voice_channel
+                or self._voice_channel_has_human(guild, voice_channel)
+            ):
+                return
+
+            await self._close_player(guild, disconnect=True, auto_leave=True)
         except Exception:
             await send_error_log(traceback.format_exc())
 
