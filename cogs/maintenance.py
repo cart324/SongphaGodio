@@ -167,7 +167,7 @@ class Maintenance(commands.Cog):
 
         for vc in self.bot.voice_clients:
             try:
-                server_info = self.bot.server_info_dict.get(vc.guild.id)
+                server_info = server_info_dict.get(vc.guild.id)
                 if server_info and server_info.embed_channel:
                     await server_info.embed_channel.send(f"📢 **관리자 알림:** {text}")
                     success_count += 1
