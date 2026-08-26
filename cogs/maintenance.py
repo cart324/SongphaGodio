@@ -133,7 +133,47 @@ class Maintenance(commands.Cog):
 
         await ctx.followup.send(embed=embed)
 
-    # is_owner() 체크 실패 시 에러 핸들러
+    @commands.slash_command(
+        name="leave_all",
+        description="활성화된 모든 플레이어를 종료합니다. (관리자 전용)",
+        guild_ids=[DEVELOP_SERVER_ID],
+        default_member_permissions=discord.Permissions(administrator=True)
+    )
+    async def leave_all(self, ctx: discord.ApplicationContext):
+        await ctx.defer()
+        audio_player = self.bot.get_cog("audio_player")
+        if audio_player is None:
+            await ctx.followup.send("오디오 플레이어를 찾을 수 없습니다.")
+            return
+
+        voice_clients = list(self.bot.voice_clients)
+        if not voice_clients:
+            await ctx.followup.send("종료할 활성 플레이어가 없습니다.")
+            return
+
+        results = await asyncio.gather(
+            *(
+                audio_player._close_player(voice_client.guild, disconnect=True)
+                for voice_client in voice_clients
+            ),
+            return_exceptions=True,
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            error_log = "\n\n".join(
+                "".join(traceback.format_exception(type(error), error, error.__traceback__))
+                for error in errors
+            )
+            await send_error_log(error_log, ctx.author.name)
+
+        await ctx.followup.send(
+            f"모든 플레이어 종료 작업이 완료되었습니다.\n"
+            f"✅ 종료: {results.count(True)} 서버\n"
+            f"⏭️ 이미 종료됨: {results.count(False)} 서버\n"
+            f"❌ 실패: {len(errors)} 서버"
+        )
+
+    # 모든 Maintenance 명령에 관리자 권한을 요구합니다.
     async def cog_check(self, ctx: discord.ApplicationContext) -> bool:
         return bool(ctx.guild and ctx.author.guild_permissions.administrator)
 
