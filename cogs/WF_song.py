@@ -49,7 +49,7 @@ class WFSong(commands.Cog, name="wf_song"):
     async def back_to_lobby(self, ctx):
         """Nacas의 불후의 명곡 'back to lobby'를 재생합니다."""
 
-    @song_command(1542231117522927767)
+    @song_command(1542261321570193499)
     async def back_to_lobby2(self, ctx):
         """Nacas의 최신곡 'Back to Lobby 2'를 재생합니다."""
 
