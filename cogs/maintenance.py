@@ -6,6 +6,7 @@ import subprocess
 import requests
 import asyncio
 import yt_dlp
+from packaging.version import InvalidVersion, Version
 from modules.error_notifier import send_error_log
 
 # Audio_player.py 에서 server_info_dict를 가져오기 위함
@@ -22,6 +23,7 @@ class Maintenance(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._yt_dlp_update_running = False
 
     @commands.slash_command(
         name="update_yt_dlp",
@@ -33,18 +35,30 @@ class Maintenance(commands.Cog):
         """yt-dlp를 최신 버전으로 업데이트하고 봇을 재시작하는 관리자 명령어"""
         await ctx.defer()
 
+        if self._yt_dlp_update_running:
+            await ctx.followup.send("이미 yt-dlp 업데이트를 확인하거나 진행 중입니다.")
+            return
+        self._yt_dlp_update_running = True
+
         try:
             # 1. 현재 설치된 버전 확인
-            current_version = yt_dlp.version.__version__
+            current_version = Version(yt_dlp.version.__version__.strip())
 
             # 2. PyPI에서 최신 버전 정보 가져오기
-            response = requests.get("https://pypi.org/pypi/yt-dlp/json", timeout=5)
+            response = await asyncio.to_thread(requests.get, "https://pypi.org/pypi/yt-dlp/json", timeout=5)
             response.raise_for_status()
-            latest_version = response.json()["info"]["version"]
+            latest_version = Version(response.json()["info"]["version"].strip())
 
             if current_version == latest_version:
                 await ctx.followup.send(
                     f"✅ `yt-dlp`는 이미 최신 버전({latest_version})입니다. 재시작이 필요하지 않습니다."
+                )
+                return
+
+            if current_version > latest_version:
+                await ctx.followup.send(
+                    f"현재 `yt-dlp`({current_version})는 PyPI 최신 버전({latest_version})보다 높습니다. "
+                    "업데이트하거나 다운그레이드하지 않습니다."
                 )
                 return
 
@@ -53,33 +67,60 @@ class Maintenance(commands.Cog):
             )
 
             # 3. pip를 사용하여 yt-dlp 업데이트 (별도 스레드에서 실행)
+            print(f'[YT-DLP UPDATE] pip_start current={current_version} target={latest_version}')
             process = await asyncio.to_thread(
                 subprocess.run,
                 [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
-                capture_output=True, text=True, check=False  # check=False로 에러 발생 시에도 계속 진행
+                capture_output=True, text=True, check=False, timeout=180
             )
+            print(f'[YT-DLP UPDATE] pip_exit returncode={process.returncode}')
 
             if process.returncode == 0:
+                # The imported module still contains the pre-update version. Query a fresh process.
+                verification = await asyncio.to_thread(
+                    subprocess.run,
+                    [sys.executable, "-c", "from importlib.metadata import version; print(version('yt-dlp'))"],
+                    capture_output=True, text=True, check=False, timeout=15,
+                )
+                if verification.returncode != 0:
+                    await ctx.followup.send("❌ pip는 종료됐지만 설치 버전을 확인하지 못했습니다. 봇을 재시작하지 않습니다.")
+                    print(f'[YT-DLP UPDATE] version_check_failed returncode={verification.returncode}')
+                    return
+                installed_version = Version(verification.stdout.strip())
+                print(f'[YT-DLP UPDATE] installed={installed_version} target={latest_version}')
+                if installed_version < latest_version:
+                    await ctx.followup.send(
+                        f"❌ pip는 정상 종료됐지만 설치 버전({installed_version})이 목표 버전({latest_version})보다 낮습니다.\n"
+                        "업데이트가 적용되지 않아 재시작하지 않습니다. pip 저장소·프록시 설정을 확인해주세요."
+                    )
+                    return
                 await ctx.followup.send(
-                    f"✅ `yt-dlp`가 {latest_version} 버전으로 성공적으로 업데이트되었습니다.\n"
+                    f"✅ `yt-dlp` 설치 버전이 {installed_version}임을 확인했습니다.\n"
                     "**봇을 재시작하여 변경사항을 적용합니다.**"
                 )
                 # main.py의 재시작 로직을 트리거하기 위한 플래그 설정
                 self.bot.restart_reason = 'update'
                 await self.bot.close()
             else:
-                error_message = process.stderr or process.stdout
+                error_message = (process.stderr or process.stdout or 'pip 출력 없음')[-1500:]
                 await ctx.followup.send(
                     f"❌ 업데이트 중 오류가 발생했습니다.\n"
                     f"```\n{error_message}\n```"
                 )
 
+        except InvalidVersion:
+            await ctx.followup.send("버전 정보를 해석할 수 없어 업데이트를 중단했습니다. 봇을 재시작하지 않습니다.")
+        except subprocess.TimeoutExpired:
+            print('[YT-DLP UPDATE] subprocess_timeout')
+            await ctx.followup.send("업데이트 또는 설치 버전 확인 시간이 초과되었습니다. 봇을 재시작하지 않습니다.")
         except requests.RequestException as e:
             await ctx.followup.send(f"PyPI에서 최신 버전 정보를 가져오는 데 실패했습니다: {e}")
         except Exception:
             error_log = traceback.format_exc()
             print(f"yt-dlp update failed: {error_log}")
             await ctx.followup.send(f"알 수 없는 오류가 발생했습니다. 로그를 확인해주세요.")
+        finally:
+            self._yt_dlp_update_running = False
 
     @commands.slash_command(
         name="check_players",
