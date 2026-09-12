@@ -15,8 +15,8 @@ from modules.Song_processer import async_normalize_volume
 from modules.ffmpeg_log_filter import (
     AccessDeniedClassification,
     FilteredFFmpegPCMAudio,
-    translate_http_403_cause,
 )
+from modules.stream_diagnostics import format_http_403_message
 
 LATEST_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -204,15 +204,21 @@ async def _handle_playback_end(
             playback_id,
             playback_end_token,
         )
-        if retry_result is not False:
+        if retry_result is True:
+            await _send_playback_diagnostic(
+                guild_id, server_info,
+                format_http_403_message(current_song.get('title'), classification)
+                + "\n처리: 만료된 주소를 갱신하여 재생을 다시 시도했습니다.",
+            )
+            return
+        if retry_result is None:
             return
 
     notification_message = None
 
     if server_info.embed_channel:
         title = current_song.get('title', '알 수 없는 곡')
-        cause = translate_http_403_cause(classification.cause)
-        notification_message = f"{title} 재생하는데 실패했습니다. ({cause})"
+        notification_message = format_http_403_message(title, classification)
 
     # A failed looped song must not be selected again by the next play_loop call.
     server_info.song_cache = None
@@ -222,15 +228,19 @@ async def _handle_playback_end(
     # playback means another command already continued the queue for us.
     await play_loop(guild_id, bot)
 
+    if notification_message is not None:
+        await _send_playback_diagnostic(guild_id, server_info, notification_message)
+
+
+async def _send_playback_diagnostic(guild_id: int, server_info: ServerInfo, message: str) -> None:
     if (
-        notification_message is not None
-        and server_info_dict.get(guild_id) is server_info
+        server_info_dict.get(guild_id) is server_info
         and server_info.voice_client is not None
         and server_info.embed_channel is not None
     ):
         try:
             await server_info.embed_channel.send(
-                notification_message,
+                message,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
-from urllib.parse import parse_qs, urlparse
 import os
 import re
 import threading
@@ -11,8 +8,15 @@ import time
 
 import discord
 
+from modules.stream_diagnostics import (
+    AccessDeniedClassification,
+    classify_http_403,
+    configured_ffmpeg_headers,
+    sanitize_diagnostic,
+    translate_http_403_cause,
+)
 
-KST = timezone(timedelta(hours=9))
+
 HTTP_403_PATTERN = re.compile(r"(?:http error|returned|status(?: code)?)\D*403\b|403 forbidden", re.IGNORECASE)
 GOOGLEVIDEO_URL_PATTERN = re.compile(r"https?://[^\s]*googlevideo\.com/[^\s]+", re.IGNORECASE)
 RECONNECT_PATTERN = re.compile(
@@ -22,44 +26,10 @@ RECONNECT_PATTERN = re.compile(
 )
 MAX_STDERR_BYTES = 128 * 1024
 AUDIO_FRAME_DURATION = 0.020
-HTTP_403_CAUSE_TRANSLATIONS = {
-    "remote_access_denied": "원격 서버에서 접근 거부",
-    "expired_stream_url": "재생 주소 만료",
-    "configured_egress_ip_mismatch": "재생 주소와 접속 IP 불일치",
-    "authentication_or_entitlement_required": "로그인 또는 시청 권한 필요",
-    "age_restricted_request_context": "연령 제한 인증 필요",
-    "embed_playback_restricted": "외부 플레이어 재생 제한",
-    "youtube_cdn_access_denied": "YouTube 서버에서 재생 요청 거부",
-    "youtube_access_context_rejected": "YouTube에서 재생 요청 환경 거부",
-}
-
-
-@dataclass(frozen=True)
-class AccessDeniedClassification:
-    cause: str
-    details: tuple[str, ...]
-
-
-def translate_http_403_cause(cause: str) -> str:
-    return HTTP_403_CAUSE_TRANSLATIONS.get(cause, "접근 거부 원인 확인 불가")
-
-
-def _query_value(query: Mapping[str, list[str]], key: str) -> str | None:
-    values = query.get(key)
-    return values[0] if values else None
-
-
-def _masked_ip(ip_address: str | None) -> str:
-    if not ip_address:
-        return "unknown"
-    parts = ip_address.split(".")
-    if len(parts) == 4:
-        return ".".join((*parts[:3], "xxx"))
-    return "masked"
 
 
 def _safe_title(title: str | None) -> str:
-    return (title or "unknown").replace("\r", " ").replace("\n", " ").replace('"', "'")[:160]
+    return sanitize_diagnostic(title or "unknown", 160)
 
 
 def _format_reconnect_log(line: str, *, song_title: str | None, guild_name: str) -> str | None:
@@ -73,110 +43,6 @@ def _format_reconnect_log(line: str, *, song_title: str | None, guild_name: str)
     )
 
 
-def classify_http_403(
-    play_url: str,
-    stream_metadata: Mapping[str, Any] | None = None,
-    *,
-    expected_ip: str | None = None,
-    now: float | None = None,
-) -> AccessDeniedClassification:
-    """Classify an FFmpeg HTTP 403 using only evidence available to the bot."""
-    metadata = stream_metadata or {}
-    parsed_url = urlparse(play_url)
-    query = parse_qs(parsed_url.query)
-    hostname = (parsed_url.hostname or "").lower()
-    is_youtube_stream = hostname == "googlevideo.com" or hostname.endswith(".googlevideo.com")
-    availability = metadata.get("availability")
-    age_limit = metadata.get("age_limit")
-    playable_in_embed = metadata.get("playable_in_embed")
-    player_client = (_query_value(query, "c") or "unknown").upper()
-    details: list[str] = []
-
-    if availability:
-        details.append(f"availability={availability}")
-    if availability == "unlisted":
-        details.append("unlisted_is_not_access_restriction")
-    if metadata.get("yt_dlp_version"):
-        details.append(f"yt_dlp={metadata['yt_dlp_version']}")
-
-    if not is_youtube_stream:
-        return AccessDeniedClassification(
-            "remote_access_denied",
-            (*details, "possible=permission,token,request_headers"),
-        )
-
-    expires_at = _query_value(query, "expire")
-    if expires_at:
-        try:
-            expires_timestamp = int(expires_at)
-        except ValueError:
-            expires_timestamp = None
-        if expires_timestamp is not None and (now if now is not None else time.time()) >= expires_timestamp:
-            expired_at = datetime.fromtimestamp(expires_timestamp, KST).strftime("%Y-%m-%d_%H:%M:%S_KST")
-            return AccessDeniedClassification(
-                "expired_stream_url",
-                (*details, f"expired_at={expired_at}", "action=refresh_url"),
-            )
-
-    bound_ip = _query_value(query, "ip")
-    if bound_ip and expected_ip and bound_ip != expected_ip:
-        return AccessDeniedClassification(
-            "configured_egress_ip_mismatch",
-            (
-                *details,
-                f"bound_ip={_masked_ip(bound_ip)}",
-                f"configured_ip={_masked_ip(expected_ip)}",
-                "possible=vpn_change,region_route_change",
-            ),
-        )
-
-    entitlement_restrictions = {"private", "premium_only", "subscriber_only"}
-    if availability in entitlement_restrictions:
-        return AccessDeniedClassification(
-            "authentication_or_entitlement_required",
-            (*details, "possible=cookies,account,subscription,video_restriction"),
-        )
-
-    if isinstance(age_limit, (int, float)) and age_limit >= 18:
-        return AccessDeniedClassification(
-            "age_restricted_request_context",
-            (*details, f"age_limit={int(age_limit)}", "possible=missing_cookies_or_headers"),
-        )
-
-    if availability == "needs_auth":
-        return AccessDeniedClassification(
-            "authentication_or_entitlement_required",
-            (*details, "possible=cookies,account,video_restriction"),
-        )
-
-    details.append(f"client={player_client}")
-    if playable_in_embed is False:
-        details.append("playable_in_embed=false")
-
-    if playable_in_embed is False and "EMBEDDED" in player_client:
-        return AccessDeniedClassification(
-            "embed_playback_restricted",
-            (*details, "possible=selected_client_not_allowed"),
-        )
-    if player_client == "ANDROID_VR":
-        return AccessDeniedClassification(
-            "youtube_cdn_access_denied",
-            (
-                *details,
-                "possible=yt_dlp_client_fallback,PO_token,request_headers,actual_egress_ip,"
-                "region_lock,video_restriction,rate_limit",
-            ),
-        )
-
-    return AccessDeniedClassification(
-        "youtube_access_context_rejected",
-        (
-            *details,
-            "possible=request_headers,actual_egress_ip,region_lock,signature,PO_token,rate_limit",
-        ),
-    )
-
-
 def report_ffmpeg_stderr(
     stderr_output: bytes | str,
     *,
@@ -185,27 +51,43 @@ def report_ffmpeg_stderr(
     guild_name: str,
     stream_metadata: Mapping[str, Any] | None = None,
     expected_ip: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
+    observed_at: float | None = None,
     classification_callback: Callable[[AccessDeniedClassification], None] | None = None,
 ) -> bool:
-    """Hide known FFmpeg network noise and print one classified line for HTTP 403."""
+    """Report local evidence and bounded, redacted error lines for HTTP 403."""
     if isinstance(stderr_output, bytes):
         text = stderr_output.decode("utf-8", errors="replace")
     else:
         text = stderr_output
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    has_http_403 = any(HTTP_403_PATTERN.search(line) for line in lines)
+    has_http_403 = observed_at is not None or any(HTTP_403_PATTERN.search(line) for line in lines)
     if has_http_403:
         classification = classify_http_403(
             play_url,
             stream_metadata,
             expected_ip=expected_ip,
+            request_headers=request_headers,
+            now=observed_at,
         )
         detail_text = " ".join(classification.details)
         print(
-            f'[FFMPEG 403] cause={classification.cause} guild="{_safe_title(guild_name)}" '
+            f'[FFMPEG 403] id={classification.diagnostic_id} cause={classification.cause} '
+            f'guild="{_safe_title(guild_name)}" '
             f'title="{_safe_title(song_title)}" {detail_text}'.rstrip()
         )
+        for label, items in (("확인", classification.evidence), ("추정", classification.suspected),
+                             ("미확인", classification.unknown), ("점검", classification.actions)):
+            if items:
+                print(f"[FFMPEG 403 DETAIL] id={classification.diagnostic_id} {label}: " + " / ".join(items))
+        # Bound and deduplicate the actual error lines, masking signed URLs and credentials.
+        error_lines = list(dict.fromkeys(
+            sanitize_diagnostic(line) for line in lines
+            if HTTP_403_PATTERN.search(line) or "error" in line.lower() or "failed" in line.lower()
+        ))
+        for line in error_lines[:3]:
+            print(f"[FFMPEG 403 STDERR] id={classification.diagnostic_id} {line}")
         if classification_callback is not None:
             classification_callback(classification)
         return True
@@ -311,12 +193,14 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
         self._cleaned = True
         self._access_denied_classification: AccessDeniedClassification | None = None
         self._next_frame_at: float | None = None
+        self._first_http_403_at: float | None = None
         self._stderr_context = {
             "play_url": source,
             "song_title": song_title,
             "guild_name": guild_name,
             "stream_metadata": dict(stream_metadata or {}),
             "expected_ip": expected_ip,
+            "request_headers": configured_ffmpeg_headers(ffmpeg_options),
         }
         self._stderr_capture = BoundedStderrCapture(line_callback=self._report_reconnect_line)
         try:
@@ -331,6 +215,8 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
             self._access_denied_classification = classification
 
     def _report_reconnect_line(self, line: str) -> None:
+        if self._first_http_403_at is None and HTTP_403_PATTERN.search(line):
+            self._first_http_403_at = time.time()
         message = _format_reconnect_log(
             line,
             song_title=self._stderr_context["song_title"],
@@ -373,6 +259,7 @@ class FilteredFFmpegPCMAudio(discord.FFmpegPCMAudio):
                     report_ffmpeg_stderr(
                         stderr_output,
                         **self._stderr_context,
+                        observed_at=self._first_http_403_at,
                         classification_callback=self._remember_access_denied,
                     )
                 except Exception as error:

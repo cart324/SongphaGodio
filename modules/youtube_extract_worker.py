@@ -5,9 +5,12 @@ import os
 import re
 import shutil
 import sys
+import time
 import traceback
 
 import yt_dlp
+
+from modules.stream_diagnostics import ExtractionDiagnosticLogger
 
 
 def _find_js_runtime() -> dict:
@@ -47,7 +50,8 @@ YDL_PLAYLIST_OPTIONS = {
 
 
 def extract_video(url: str, fallback_thumbnail: str) -> list:
-    with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+    diagnostic_logger = ExtractionDiagnosticLogger()
+    with yt_dlp.YoutubeDL({**YDL_OPTIONS, 'logger': diagnostic_logger}) as ydl:
         info = ydl.extract_info(url, download=False)
 
     stream_metadata = {
@@ -55,6 +59,10 @@ def extract_video(url: str, fallback_thumbnail: str) -> list:
         'age_limit': info.get('age_limit'),
         'playable_in_embed': info.get('playable_in_embed'),
         'format_id': info.get('format_id'),
+        'protocol': info.get('protocol'),
+        'extracted_at': time.time(),
+        'extraction_warning_codes': diagnostic_logger.codes,
+        'extraction_warning_count': diagnostic_logger.warning_count,
         'yt_dlp_version': getattr(getattr(yt_dlp, 'version', None), '__version__', 'unknown'),
         'http_headers': dict(info.get('http_headers') or {}),
     }
