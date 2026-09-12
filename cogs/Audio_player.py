@@ -44,6 +44,7 @@ google_drive_pattern = re.compile(r'^(http|https)://(www\.)?drive\.google\.com/'
 VPN_IP = "121.133.106.37"
 PLAYLIST_DESCRIPTION_LIMIT = 3800
 AUTO_LEAVE_RECHECK_DELAY = 2.0
+VOICE_RECOVERY_TIMEOUT = 10.0
 
 
 def _pin_playback_workers(voice_client, source) -> None:
@@ -93,10 +94,128 @@ class ServerInfo:
         self.playback_id = 0
         self.playback_end_token = None
         self.url_refresh_token = None
+        self.playback_end_task = None
 
 
 # 참조한 서버ID가 없을 시 ServerInfo를 기본값으로 새로운 키:벨류 쌍 생성
 server_info_dict = defaultdict(ServerInfo)
+# Serialize only connection maintenance, using the same lock as /leave.
+_voice_locks = defaultdict(asyncio.Lock)
+_voice_maintenance = set()
+
+
+def _current_voice_session(guild, bot, voice_client) -> bool:
+    """A channel member alone may be a ghost left by a previous bot session."""
+    voice_state = guild.me.voice if guild.me else None
+    return (
+        voice_client is not None
+        and guild.voice_client is voice_client
+        and voice_client.client is bot
+        and voice_client.guild.id == guild.id
+        and voice_client.is_connected()
+        and voice_client.channel is not None
+        and voice_state is not None
+        and voice_state.channel is not None
+        and voice_client.channel.id == voice_state.channel.id
+        and bool(voice_client.session_id)
+        and voice_client.session_id == voice_state.session_id
+    )
+
+
+def _player_state_issue(guild, bot, state) -> str | None:
+    voice_client = guild.voice_client
+    if voice_client is None:
+        if guild.me and guild.me.voice and guild.me.voice.channel:
+            return 'ghost_voice_presence'
+        if state.voice_client is not None or state.song_cache is not None or state.queue:
+            return 'missing_voice_connection'
+        if state.playback_end_token is not None or state.url_refresh_token is not None:
+            return 'orphan_playback_state'
+        return None
+    if not _current_voice_session(guild, bot, voice_client):
+        return 'invalid_voice_session'
+    if state.voice_client is not voice_client:
+        return 'voice_reference_mismatch'
+    if state.embed_channel is None:
+        return 'missing_player_channel'
+    active = voice_client.is_playing() or voice_client.is_paused()
+    if active and state.song_cache is None:
+        return 'missing_current_song'
+    if not active and (state.song_cache is not None or state.playback_end_token is not None
+                       or state.url_refresh_token is not None):
+        # Pycord's thread can still be cleaning up, or its end task refreshing a URL.
+        player_thread = getattr(voice_client, '_player', None)
+        thread_alive = player_thread is not None and player_thread.is_alive()
+        end_pending = state.playback_end_task is not None and not state.playback_end_task.done()
+        if not thread_alive and not end_pending:
+            return 'stale_playback_state'
+    return None
+
+
+async def _reset_invalid_player(guild, bot, state, reason: str) -> None:
+    """Called under _voice_locks; invalidate callbacks before touching the connection."""
+    already_maintaining = guild.id in _voice_maintenance
+    _voice_maintenance.add(guild.id)
+    dropped = len(state.queue)
+    registered_voice = guild.voice_client
+    stored_voice = state.voice_client
+    state.voice_client = None
+    state.song_cache = None
+    state.playback_end_token = None
+    state.url_refresh_token = None
+    state.queue.clear()
+    server_info_dict[guild.id] = ServerInfo()
+    print(f'[PLAYER RECOVERY] guild_id={guild.id} reason={reason} dropped_queue={dropped}')
+    try:
+        # Force cleanup even when is_connected() is false. Never adopt an orphan object.
+        clients = [registered_voice] if registered_voice is not None else []
+        if stored_voice is not None and stored_voice is not registered_voice:
+            clients.append(stored_voice)
+        for voice_client in clients:
+            if voice_client.guild.id != guild.id:
+                continue
+            try:
+                await asyncio.wait_for(voice_client.disconnect(force=True), VOICE_RECOVERY_TIMEOUT)
+            finally:
+                # A stale cleanup must not remove a replacement registered by another session.
+                if guild.voice_client is voice_client:
+                    voice_client.cleanup()
+
+        # No local VoiceClient may exist for a previous process's ghost presence.
+        # Register the gateway listener before requesting departure, then require confirmation.
+        if guild.me and guild.me.voice and guild.me.voice.channel:
+            def left_channel(member, before, after):
+                return member.id == bot.user.id and member.guild.id == guild.id and after.channel is None
+
+            departure = asyncio.create_task(bot.wait_for(
+                'voice_state_update', check=left_channel, timeout=VOICE_RECOVERY_TIMEOUT,
+            ))
+            try:
+                await asyncio.sleep(0)
+                await asyncio.wait_for(guild.change_voice_state(channel=None), VOICE_RECOVERY_TIMEOUT)
+                await departure
+            finally:
+                departure.cancel()
+                await asyncio.gather(departure, return_exceptions=True)
+        if guild.voice_client is not None:
+            raise RuntimeError('Voice client remained registered after player recovery')
+        if guild.me and guild.me.voice and guild.me.voice.channel:
+            raise RuntimeError('Voice presence remained after departure confirmation')
+        if state.embed_channel is not None and state.embed_id is not None:
+            try:
+                message = await state.embed_channel.fetch_message(state.embed_id)
+                await message.edit(embed=discord.Embed(
+                    title='음성 연결 상태가 일치하지 않아 플레이어를 초기화했습니다.',
+                    description='기존 재생목록을 비웠습니다. 새 요청으로 다시 연결합니다.',
+                ), view=None)
+            except discord.HTTPException:
+                pass
+    except Exception as error:
+        print(f'[PLAYER RECOVERY FAILED] guild_id={guild.id} error={type(error).__name__}')
+        raise
+    finally:
+        if not already_maintaining:
+            _voice_maintenance.discard(guild.id)
 
 
 async def _refresh_and_retry_expired_stream(
@@ -253,6 +372,21 @@ async def play_loop(guild_id: int, bot: commands.Bot, retry_song: dict | None = 
     """재생이 끝날 때 마다 queue에서 노래를 하나씩 불러와 반복 실행되는 루프 함수"""
     server_info = server_info_dict[guild_id]
     try:
+        # Let a just-finished voice thread publish its end task before checking idle state.
+        await asyncio.sleep(0)
+        if server_info_dict.get(guild_id) is not server_info:
+            return
+        guild = bot.get_guild(guild_id)
+        if guild is None or guild_id in _voice_maintenance:
+            return
+        if _player_state_issue(guild, bot, server_info):
+            async with _voice_locks[guild_id]:
+                if server_info_dict.get(guild_id) is not server_info:
+                    return
+                reason = _player_state_issue(guild, bot, server_info)
+                if reason:
+                    await _reset_invalid_player(guild, bot, server_info, reason)
+                    return
         # URL 갱신 중 호출된 일반 재생 루프는 갱신 작업이 이어서 처리합니다.
         if (
             retry_song is None
@@ -328,7 +462,7 @@ async def play_loop(guild_id: int, bot: commands.Bot, retry_song: dict | None = 
 
                     def schedule_next_song():
                         if not bot.loop.is_closed():
-                            bot.loop.create_task(
+                            task = bot.loop.create_task(
                                 _handle_playback_end(
                                     guild_id,
                                     bot,
@@ -339,6 +473,16 @@ async def play_loop(guild_id: int, bot: commands.Bot, retry_song: dict | None = 
                                     classification,
                                 )
                             )
+                            server_info.playback_end_task = task
+
+                            def end_task_done(completed):
+                                if server_info.playback_end_task is completed:
+                                    server_info.playback_end_task = None
+                                if not completed.cancelled() and completed.exception() is not None:
+                                    print(f'[PLAYER END ERROR] guild_id={guild_id} '
+                                          f'error={type(completed.exception()).__name__}')
+
+                            task.add_done_callback(end_task_done)
 
                     try:
                         bot.loop.call_soon_threadsafe(schedule_next_song)
@@ -391,7 +535,7 @@ async def play_loop(guild_id: int, bot: commands.Bot, retry_song: dict | None = 
 class AudioPlayer(commands.Cog, name="audio_player"):
     def __init__(self, bot):
         self.bot = bot
-        self._disconnect_locks = defaultdict(asyncio.Lock)
+        self._disconnect_locks = _voice_locks
 
     def _voice_channel_has_human(self, guild, voice_channel) -> bool:
         """Treat unknown cached members as human to avoid false automatic disconnects."""
@@ -409,10 +553,13 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 return True
         return False
 
-    async def _close_player(self, guild: discord.Guild, *, disconnect: bool, auto_leave: bool = False) -> bool:
+    async def _close_player(self, guild: discord.Guild, *, disconnect: bool, auto_leave: bool = False,
+                            expected_state: ServerInfo | None = None) -> bool:
         """Finalize one guild player exactly once across command and voice-state events."""
         async with self._disconnect_locks[guild.id]:
             server_info = server_info_dict[guild.id]
+            if expected_state is not None and server_info is not expected_state:
+                return False
             voice_client = guild.voice_client or server_info.voice_client
             is_connected = voice_client is not None and voice_client.is_connected()
 
@@ -454,22 +601,34 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 handling_log('auto_leave')
             return True
 
-    async def _ensure_voice_connection(self, ctx: discord.ApplicationContext) -> bool:
-        """봇이 음성 채널에 연결되어 있는지 확인하고, 연결되어 있지 않으면 연결을 시도합니다."""
-        server_info = server_info_dict[ctx.guild.id]
-        if ctx.voice_client:
-            return True
+    async def _ensure_voice_connection(self, ctx: discord.ApplicationContext) -> ServerInfo | None:
+        """Return a validated state snapshot, resetting invalid sessions before connecting."""
+        async with _voice_locks[ctx.guild.id]:
+            await asyncio.sleep(0)
+            state = server_info_dict[ctx.guild.id]
+            reason = _player_state_issue(ctx.guild, self.bot, state)
+            if reason is None and _current_voice_session(ctx.guild, self.bot, state.voice_client):
+                return state
 
-        if not ctx.author.voice or not ctx.author.voice.channel:
-            await ctx.followup.send("먼저 음성 채널에 접속해주세요.", ephemeral=True)
-            return False
-
-        await ctx.author.voice.channel.connect()
-        server_info.voice_client = ctx.voice_client
-        server_info.embed_channel = ctx.channel
-        await handling_embed(server_info)
-        handling_log('player_start', index1=ctx.guild.name)
-        return True
+            _voice_maintenance.add(ctx.guild.id)
+            try:
+                if reason:
+                    await _reset_invalid_player(ctx.guild, self.bot, state, reason)
+                if not ctx.author.voice or not ctx.author.voice.channel:
+                    await ctx.followup.send("먼저 음성 채널에 접속해주세요.", ephemeral=True)
+                    return None
+                state = server_info_dict[ctx.guild.id]
+                voice_client = await ctx.author.voice.channel.connect(timeout=VOICE_RECOVERY_TIMEOUT)
+                state.voice_client = voice_client
+                state.embed_channel = ctx.channel
+                if not _current_voice_session(ctx.guild, self.bot, voice_client):
+                    await _reset_invalid_player(ctx.guild, self.bot, state, 'new_session_validation_failed')
+                    raise RuntimeError('New voice session could not be verified')
+                await handling_embed(state)
+                handling_log('player_start', index1=ctx.guild.name)
+                return state
+            finally:
+                _voice_maintenance.discard(ctx.guild.id)
 
     async def _add_song_to_queue(self, author: discord.Member, url: str) -> dict | None:
         """노래를 처리하고 큐에 추가할 노래 정보를 반환합니다."""
@@ -485,7 +644,6 @@ class AudioPlayer(commands.Cog, name="audio_player"):
         """음악을 재생목록에 추가합니다. 유튜브, 구글 드라이브, 온라인 파일 링크(ex:디스코드 첨부파일링크)를 지원합니다."""
         try:
             url = url.strip("‪")
-            server_info = server_info_dict[ctx.guild.id]
             await ctx.defer(ephemeral=True)
             handling_log('play_init', user_name=ctx.author.name)
 
@@ -495,9 +653,14 @@ class AudioPlayer(commands.Cog, name="audio_player"):
 
             voice_connection_task = asyncio.create_task(self._ensure_voice_connection(ctx))
             song_info_task = asyncio.create_task(self._add_song_to_queue(ctx.author, url))
-            is_connected, song_info_dict = await asyncio.gather(voice_connection_task, song_info_task)
+            server_info, song_info_dict = await asyncio.gather(voice_connection_task, song_info_task)
 
-            if not is_connected:
+            if server_info is None:
+                return
+
+            if (server_info_dict.get(ctx.guild.id) is not server_info
+                    or server_info.voice_client is None):
+                await ctx.followup.send("플레이어가 종료되거나 초기화되어 곡 추가를 취소했습니다. 다시 요청해주세요.", ephemeral=True)
                 return
 
             if song_info_dict is None:
@@ -511,13 +674,14 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             if (
                 not ctx.voice_client.is_playing()
                 and not ctx.voice_client.is_paused()
-                and server_info.song_cache is None
-                and server_info.playback_end_token is None
-                and server_info.url_refresh_token is None
             ):
                 await play_loop(ctx.guild.id, self.bot)
             else:
                 await handling_embed(server_info)
+
+            if server_info_dict.get(ctx.guild.id) is not server_info:
+                await ctx.followup.send("음성 연결 복구를 위해 플레이어를 초기화했습니다. 다시 요청해주세요.", ephemeral=True)
+                return
 
             await ctx.followup.send(
                 f"노래를 재생목록에 추가하였습니다!\n"
@@ -537,10 +701,10 @@ class AudioPlayer(commands.Cog, name="audio_player"):
     async def playlist(self, ctx, playlist_url):
         """유튜브 플레이리스트에서 곡을 불러옵니다. 한곡에 약 4초씩 소요되니 차분히 기다려주세요."""
         try:
-            server_info = server_info_dict[ctx.guild.id]
             await ctx.defer(ephemeral=True)
 
-            if not await self._ensure_voice_connection(ctx):
+            server_info = await self._ensure_voice_connection(ctx)
+            if server_info is None:
                 return
 
             # 유튜브 링크일 경우
@@ -612,10 +776,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
 
                     # 첫 곡이 준비되는 즉시 재생하고, 재생목록 추출은 계속 진행합니다.
                     if (
-                        server_info.song_cache is None
-                        and server_info.playback_end_token is None
-                        and server_info.url_refresh_token is None
-                        and not server_info.voice_client.is_playing()
+                        not server_info.voice_client.is_playing()
                         and not server_info.voice_client.is_paused()
                     ):
                         await play_loop(ctx.guild.id, self.bot)
@@ -940,7 +1101,10 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             # Handle an external kick/forced disconnect even after guild.voice_client is cleared.
             if self.bot.user and member.id == self.bot.user.id:
                 if before.channel is not None and after.channel is None:
-                    await self._close_player(guild, disconnect=False)
+                    if guild.id in _voice_maintenance or _current_voice_session(guild, self.bot, guild.voice_client):
+                        return
+                    await self._close_player(guild, disconnect=False,
+                                             expected_state=server_info_dict[guild.id])
                 return
 
             voice_client = guild.voice_client
@@ -948,6 +1112,7 @@ class AudioPlayer(commands.Cog, name="audio_player"):
                 return
 
             voice_channel = voice_client.channel
+            expected_state = server_info_dict[guild.id]
             if (
                 voice_channel is None
                 or before.channel != voice_channel
@@ -964,12 +1129,13 @@ class AudioPlayer(commands.Cog, name="audio_player"):
             current_voice_client = guild.voice_client
             if (
                 current_voice_client is None
+                or current_voice_client is not voice_client
                 or current_voice_client.channel != voice_channel
                 or self._voice_channel_has_human(guild, voice_channel)
             ):
                 return
 
-            await self._close_player(guild, disconnect=True, auto_leave=True)
+            await self._close_player(guild, disconnect=True, auto_leave=True, expected_state=expected_state)
         except Exception:
             await send_error_log(traceback.format_exc())
 
