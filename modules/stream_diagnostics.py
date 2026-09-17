@@ -60,6 +60,7 @@ class AccessDeniedClassification:
     unknown: tuple[str, ...] = ()
     actions: tuple[str, ...] = ()
     diagnostic_id: str = ""
+    is_youtube_cdn: bool = False
 
 
 def translate_http_403_cause(cause: str) -> str:
@@ -67,21 +68,11 @@ def translate_http_403_cause(cause: str) -> str:
 
 
 def format_http_403_message(title: str | None, result: AccessDeniedClassification) -> str:
-    # Shared diagnostic content with CMD; keep below Discord's 2,000-character limit.
+    # Detailed evidence and suspected causes belong only in the CMD log.
     safe_title = sanitize_diagnostic(title or "알 수 없는 곡", 160)
     safe_title = re.sub(r"([\\`*_{}\[\]()#+.!|>~])", r"\\\1", safe_title)
-    lines = [f"{safe_title} 재생에 실패했습니다. (HTTP 403)",
-             f"분류: {translate_http_403_cause(result.cause)}"]
-    if result.diagnostic_id:
-        lines.append(f"진단 ID: {result.diagnostic_id} (CMD 로그와 동일)")
-    for label, items in (("확인", result.evidence), ("추정", result.suspected),
-                         ("미확인", result.unknown), ("점검", result.actions)):
-        if items:
-            lines.append(f"{label}: " + " / ".join(items))
-    message = "\n".join(lines)
-    if len(message) > 1900:
-        message = message[:1840] + "\n… 나머지 진단은 동일 ID의 CMD 로그에서 확인하세요."
-    return message
+    reason = "YouTube CDN 서버 에러" if result.is_youtube_cdn else "원격 서버 접근 거부"
+    return f"{safe_title} 재생에 실패했습니다. ({reason})"
 
 
 WARNING_RULES = {
@@ -316,4 +307,5 @@ def classify_http_403(
     details.append("cause_certainty=" + ("expired_url_observed" if cause == "expired_stream_url"
                                          else "suspected" if candidates else "unknown"))
     return AccessDeniedClassification(cause, tuple(details), tuple(evidence), tuple(suspected),
-                                      tuple(unknown), tuple(actions), uuid4().hex[:10])
+                                      tuple(unknown), tuple(actions), uuid4().hex[:10],
+                                      is_youtube_cdn=youtube)
